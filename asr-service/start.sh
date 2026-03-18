@@ -10,11 +10,9 @@ if [ ! -d "venv" ]; then
     bash setup.sh
 fi
 
-source venv/bin/activate
-
 # 将所有参数传递给 Python 服务
 # 示例:
 #   bash start.sh --model-size 1.7b --enable-align
 #   bash start.sh --device cpu --model-size 0.6b
 #   bash start.sh --model-source huggingface
-python -m app.main "$@"
+"$SCRIPT_DIR/venv/bin/python3" -m app.main "$@"
