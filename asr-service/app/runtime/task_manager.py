@@ -19,6 +19,7 @@ class TaskManager:
         self._cleanup_thread = None
         self._process_fn = None
         self._executor = ThreadPoolExecutor(max_workers=1)
+        self._stop_event = threading.Event()
 
     def set_processor(self, fn):
         """注入任务处理函数: fn(task_dict) -> result"""
@@ -67,8 +68,11 @@ class TaskManager:
 
     def _worker(self):
         """工作线程：串行处理任务，使用线程池实现真超时"""
-        while True:
-            task_id = self._queue.get()
+        while not self._stop_event.is_set():
+            try:
+                task_id = self._queue.get(timeout=1)
+            except queue.Empty:
+                continue
 
             with self._lock:
                 task = self._tasks.get(task_id)
@@ -97,6 +101,8 @@ class TaskManager:
                     task["finished_at"] = time.time()
                 logger.error(f"任务超时: {task_id} ({elapsed:.0f}s)")
             except Exception as e:
+                if self._stop_event.is_set():
+                    break
                 with self._lock:
                     task["status"] = "failed"
                     task["error"] = "内部处理错误，请检查服务日志"
@@ -105,11 +111,23 @@ class TaskManager:
             finally:
                 self._queue.task_done()
 
+    def shutdown(self):
+        """安全终止：停止工作线程并关闭线程池"""
+        logger.info("正在终止任务管理器...")
+        self._stop_event.set()
+        self._executor.shutdown(wait=False, cancel_futures=True)
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=5)
+        if self._cleanup_thread and self._cleanup_thread.is_alive():
+            self._cleanup_thread.join(timeout=2)
+        logger.info("任务管理器已终止")
+
     def _cleanup_loop(self):
         """定期清理已完成/失败的过期任务"""
-        while True:
-            time.sleep(TASK_CLEANUP_INTERVAL)
-            self._cleanup_expired_tasks()
+        while not self._stop_event.is_set():
+            self._stop_event.wait(timeout=TASK_CLEANUP_INTERVAL)
+            if not self._stop_event.is_set():
+                self._cleanup_expired_tasks()
 
     def _cleanup_expired_tasks(self):
         """清理超过 TTL 的已终结任务"""

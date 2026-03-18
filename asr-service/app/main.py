@@ -187,6 +187,12 @@ def create_app(args=None) -> FastAPI:
     init_routes(task_manager, service_info)
     app.include_router(router)
 
+    @app.on_event("shutdown")
+    def on_shutdown():
+        logger.info("收到终止信号，正在安全关闭服务...")
+        task_manager.shutdown()
+        logger.info("Qwen3-ASR Service 已安全退出")
+
     logger.info(f"Qwen3-ASR Service 就绪，监听 {cfg.HOST}:{cfg.PORT}")
     logger.info(f"运行模式: {service_info}")
     return app
