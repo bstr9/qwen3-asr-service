@@ -1,0 +1,12 @@
+torch
+torchvision
+torchaudio
+transformers
+fastapi
+uvicorn[standard]
+soundfile
+librosa
+openvino
+huggingface_hub
+modelscope
+python-multipart
