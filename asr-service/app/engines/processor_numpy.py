@@ -51,7 +51,7 @@ def _load_mel_filters(model_dir: Path | None = None) -> np.ndarray:
 
     for p in candidates:
         if p.exists():
-            raw = np.load(str(p))
+            raw = np.load(str(p), allow_pickle=False)
             if raw.shape == (_N_MELS, _N_FFT // 2 + 1):
                 _MEL_FILTERS = raw.astype(np.float32)
             elif raw.shape == (_N_FFT // 2 + 1, _N_MELS):

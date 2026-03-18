@@ -5,7 +5,7 @@ import uvicorn
 from fastapi import FastAPI
 
 from app.utils.logger import setup_logger
-from app.config import HOST, PORT
+import app.config as cfg
 from app.runtime.device import detect_device, resolve_device, auto_select_model_size, should_disable_align
 from app.runtime.task_manager import TaskManager
 from app.engines.qwen_asr_engine import QwenASREngine
@@ -48,6 +48,14 @@ def parse_args():
         "--model-source", choices=["modelscope", "huggingface"], default="modelscope",
         help="模型下载源 (default: modelscope)",
     )
+    parser.add_argument(
+        "--host", default=None,
+        help="监听地址 (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port", type=int, default=None,
+        help="监听端口 (default: 8765)",
+    )
     return parser.parse_args()
 
 
@@ -65,8 +73,11 @@ def create_app(args=None) -> FastAPI:
     logger.info("ffmpeg 检测通过")
 
     # 3. 写入全局配置
-    import app.config as cfg
     cfg.MODEL_SOURCE = args.model_source
+    if args.host is not None:
+        cfg.HOST = args.host
+    if args.port is not None:
+        cfg.PORT = args.port
 
     # 4. 检测设备并确定运行参数
     device_info = detect_device()
@@ -176,7 +187,7 @@ def create_app(args=None) -> FastAPI:
     init_routes(task_manager, service_info)
     app.include_router(router)
 
-    logger.info(f"Qwen3-ASR Service 就绪，监听 {HOST}:{PORT}")
+    logger.info(f"Qwen3-ASR Service 就绪，监听 {cfg.HOST}:{cfg.PORT}")
     logger.info(f"运行模式: {service_info}")
     return app
 
@@ -184,4 +195,4 @@ def create_app(args=None) -> FastAPI:
 app = create_app()
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host=HOST, port=PORT, reload=False)
+    uvicorn.run("app.main:app", host=cfg.HOST, port=cfg.PORT, reload=False)

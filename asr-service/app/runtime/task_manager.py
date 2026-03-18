@@ -99,9 +99,9 @@ class TaskManager:
             except Exception as e:
                 with self._lock:
                     task["status"] = "failed"
-                    task["error"] = str(e)
+                    task["error"] = "内部处理错误，请检查服务日志"
                     task["finished_at"] = time.time()
-                logger.error(f"任务失败: {task_id}, 错误: {e}")
+                logger.error(f"任务失败: {task_id}, 错误: {e}", exc_info=True)
             finally:
                 self._queue.task_done()
 

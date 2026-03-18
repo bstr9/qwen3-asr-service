@@ -4,7 +4,7 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 服务配置
-HOST = "0.0.0.0"
+HOST = "127.0.0.1"
 PORT = 8765
 
 # ─── 启动参数默认值（由 main.py argparse 覆盖） ───
