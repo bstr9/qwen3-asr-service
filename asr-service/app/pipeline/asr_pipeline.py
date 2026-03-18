@@ -87,10 +87,10 @@ class ASRPipeline:
                     "punc_enabled": self.punc is not None,
                 }
 
-            # 2. 超长 segment 二次切分 + 写入 chunk 文件
+            # 2. 合并相邻 VAD 段 + 切分写入 chunk 文件
             chunks = self._split_segments_to_chunks(wav_path, vad_segments, chunk_dir)
             total_chunks = len(chunks)
-            logger.info(f"[Pipeline] 切片完成: {len(vad_segments)} 个 VAD 段 -> {total_chunks} 个 chunk (超长阈值={MAX_SEGMENT_DURATION}s)")
+            logger.info(f"[Pipeline] 切片完成: {len(vad_segments)} 个 VAD 段 -> {total_chunks} 个 chunk")
 
             # 3. 逐 chunk ASR 识别
             segments = []
@@ -160,6 +160,33 @@ class ASRPipeline:
             # 6. 清理临时文件
             self._cleanup(audio_path, wav_path, chunk_dir)
 
+    def _merge_vad_segments(
+        self,
+        vad_segments: list[tuple[int, int]],
+    ) -> list[tuple[int, int]]:
+        """
+        贪心合并相邻 VAD 段：从第一段开始，持续追加后续段，
+        直到合并后总跨度（首段 start 到末段 end）超过 MAX_SEGMENT_DURATION，
+        则切出一组，开始新的一组。保留段间静音以维持时间戳准确性。
+        """
+        if not vad_segments:
+            return []
+
+        max_span_ms = int(MAX_SEGMENT_DURATION * 1000)
+        merged = []
+        group_start, group_end = vad_segments[0]
+
+        for start_ms, end_ms in vad_segments[1:]:
+            # 如果追加后总跨度仍在阈值内，合并
+            if end_ms - group_start <= max_span_ms:
+                group_end = end_ms
+            else:
+                merged.append((group_start, group_end))
+                group_start, group_end = start_ms, end_ms
+
+        merged.append((group_start, group_end))
+        return merged
+
     def _split_segments_to_chunks(
         self,
         wav_path: str,
@@ -167,23 +194,30 @@ class ASRPipeline:
         chunk_dir: str,
     ) -> list[dict]:
         """
-        根据 VAD 段切分音频，超长段二次切分。
+        合并相邻 VAD 段后切分音频，超长段二次切分。
 
         返回:
             [{"path": str, "offset_sec": float, "duration_sec": float}, ...]
         """
         data, sr = sf.read(wav_path)
+
+        # 先合并碎片段
+        merged = self._merge_vad_segments(vad_segments)
+        logger.info(
+            f"VAD 段合并: {len(vad_segments)} -> {len(merged)} "
+            f"(阈值={MAX_SEGMENT_DURATION}s)"
+        )
+
         chunks = []
         idx = 0
 
-        for start_ms, end_ms in vad_segments:
+        for start_ms, end_ms in merged:
             start_sample = int(start_ms / 1000 * sr)
             end_sample = int(end_ms / 1000 * sr)
             segment_data = data[start_sample:end_sample]
             segment_duration = len(segment_data) / sr
 
             if segment_duration <= MAX_SEGMENT_DURATION:
-                # 直接写入
                 chunk_path = os.path.join(chunk_dir, f"chunk_{idx:04d}.wav")
                 sf.write(chunk_path, segment_data, sr)
                 chunks.append({
@@ -193,7 +227,7 @@ class ASRPipeline:
                 })
                 idx += 1
             else:
-                # 二次切分
+                # 单段超长（理论上合并后不会出现，但作为兜底）
                 sub_samples = int(MAX_SEGMENT_DURATION * sr)
                 offset = 0
                 while offset < len(segment_data):
@@ -210,7 +244,7 @@ class ASRPipeline:
                     offset = end
                     idx += 1
 
-        logger.info(f"切分完成: {len(vad_segments)} 个 VAD 段 -> {len(chunks)} 个 chunk")
+        logger.info(f"切分完成: {len(merged)} 个合并段 -> {len(chunks)} 个 chunk")
         return chunks
 
     def _extract_text(self, results) -> str:
