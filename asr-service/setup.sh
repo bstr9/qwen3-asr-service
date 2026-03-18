@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=========================================="
-echo "  ASR Service 环境初始化"
+echo "  Qwen3-ASR Service 环境初始化"
 echo "=========================================="
 
 # 1. 检查 Python3

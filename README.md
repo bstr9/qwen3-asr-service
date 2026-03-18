@@ -1,6 +1,16 @@
-# ASR Service
+# Qwen3-ASR Service
 
-基于 FastAPI 的语音识别服务，集成 VAD 语音检测、Qwen3-ASR 识别、标点恢复，支持 GPU / CPU 两种运行模式。CPU 模式采用 OpenVINO INT8 量化推理，无需 GPU 即可高效运行。
+基于 Qwen3-ASR 的开箱即用长语音识别 API 服务。
+
+## 特性
+
+- **开箱即用** - 一键安装部署，自动下载模型
+- **长语音支持** - 支持 1s ~ 4 小时的音频文件，自动 VAD 切片处理
+- **多格式支持** - WAV / MP3 / FLAC / M4A / AAC / OGG 等
+- **灵活部署** - GPU（CUDA）和 CPU（OpenVINO INT8）双模式
+- **异步任务** - 提交任务后轮询结果，支持大文件处理
+- **时间戳支持** - 句子级 / 单词级时间戳（GPU 模式）
+- **自动标点** - 集成 CT-Transformer 标点恢复模型
 
 ## 系统要求
 

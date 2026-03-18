@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="ASR Service")
+    parser = argparse.ArgumentParser(description="Qwen3-ASR Service")
     parser.add_argument(
         "--device", choices=["auto", "cuda", "cpu"], default="auto",
         help="运行设备 (default: auto)",
@@ -58,7 +58,7 @@ def create_app(args=None) -> FastAPI:
 
     # 1. 配置日志
     setup_logger()
-    logger.info("ASR Service 启动中...")
+    logger.info("Qwen3-ASR Service 启动中...")
 
     # 2. 检测 ffmpeg
     check_ffmpeg()
@@ -173,11 +173,11 @@ def create_app(args=None) -> FastAPI:
     }
 
     # 9. 创建 FastAPI 应用
-    app = FastAPI(title="ASR Service", version="2.0.0")
+    app = FastAPI(title="Qwen3-ASR Service", version="2.0.0")
     init_routes(task_manager, service_info)
     app.include_router(router)
 
-    logger.info(f"ASR Service 就绪，监听 {HOST}:{PORT}")
+    logger.info(f"Qwen3-ASR Service 就绪，监听 {HOST}:{PORT}")
     logger.info(f"运行模式: {service_info}")
     return app
 
