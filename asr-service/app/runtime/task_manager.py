@@ -21,6 +21,10 @@ class TaskManager:
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._stop_event = threading.Event()
 
+    @property
+    def is_stopping(self) -> bool:
+        return self._stop_event.is_set()
+
     def set_processor(self, fn):
         """注入任务处理函数: fn(task_dict) -> result"""
         self._process_fn = fn

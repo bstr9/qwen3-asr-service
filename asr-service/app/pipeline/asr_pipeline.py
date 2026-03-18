@@ -35,6 +35,7 @@ class ASRPipeline:
         task_id: str,
         language: str | None = None,
         progress_callback=None,
+        cancelled=None,
     ) -> dict:
         """
         执行完整 ASR Pipeline。
@@ -95,6 +96,10 @@ class ASRPipeline:
             # 3. 逐 chunk ASR 识别
             segments = []
             for i, chunk_info in enumerate(chunks):
+                if cancelled and cancelled():
+                    logger.info(f"[Pipeline] 任务已取消，已完成 {i}/{total_chunks} 个 chunk")
+                    break
+
                 logger.info(
                     f"[Pipeline] ASR 处理中: chunk {i + 1}/{total_chunks} "
                     f"({chunk_info['offset_sec']:.1f}s ~ "

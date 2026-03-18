@@ -165,6 +165,7 @@ def create_app(args=None) -> FastAPI:
             task_id=task["task_id"],
             language=task.get("language"),
             progress_callback=on_progress,
+            cancelled=lambda: task_manager.is_stopping,
         )
 
     task_manager.set_processor(process_task)
