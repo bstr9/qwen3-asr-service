@@ -93,3 +93,5 @@ LOG_FILE = os.path.join(LOG_DIR, "asr.log")
 
 MAX_QUEUE_SIZE = 100
 TASK_TIMEOUT = 1800             # 单任务超时 30 分钟（秒）
+TASK_RESULT_TTL = 3600          # 已完成任务保留时长（秒），默认 1 小时
+TASK_CLEANUP_INTERVAL = 300     # 清理扫描间隔（秒），默认 5 分钟

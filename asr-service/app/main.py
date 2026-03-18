@@ -70,7 +70,7 @@ def create_app(args=None) -> FastAPI:
 
     # 4. 检测设备并确定运行参数
     device_info = detect_device()
-    device = resolve_device(args.device)
+    device = resolve_device(args.device, device_info=device_info)
     is_cpu = device == "cpu"
     vram_gb = device_info.get("vram_gb")
 

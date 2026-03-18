@@ -24,17 +24,18 @@ def detect_device() -> dict:
     return {"type": "cpu", "vram_gb": None, "name": None}
 
 
-def resolve_device(requested: str) -> str:
+def resolve_device(requested: str, device_info: dict | None = None) -> str:
     """
     根据用户请求和硬件情况，确定最终使用的设备。
 
     参数:
         requested: "auto" | "cuda" | "cpu"
+        device_info: detect_device() 的返回值，避免重复检测
 
     返回:
         "cuda" | "cpu"
     """
-    info = detect_device()
+    info = device_info or detect_device()
 
     if requested == "cpu":
         return "cpu"
