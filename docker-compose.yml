@@ -2,14 +2,18 @@ services:
   asr:
     image: qwen3-asr-service:latest
     # build: .  # 如需本地构建，取消此行注释
-    runtime: nvidia
     ports:
       - "8765:8765"
     volumes:
       - ./asr-service/models:/app/models
       - ./asr-service/logs:/app/logs
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     command:
       - --model-size=0.6b        # 模型大小：0.6b / 1.7b
       - --device=auto             # 运行设备：auto / cuda / cpu
