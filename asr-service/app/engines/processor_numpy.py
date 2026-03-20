@@ -48,6 +48,7 @@ def _load_mel_filters(model_dir: Path | None = None) -> np.ndarray:
         candidates.append(model_dir / "mel_filters.npy")
         candidates.append(model_dir.parent / "mel_filters.npy")
     candidates.append(Path(__file__).parent.parent.parent / "models" / "mel_filters.npy")
+    candidates.append(Path(__file__).parent.parent.parent / "mel_filters.npy")
 
     for p in candidates:
         if p.exists():

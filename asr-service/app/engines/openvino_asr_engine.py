@@ -144,6 +144,9 @@ class OpenVINOASREngine:
         4. decoder 自回归解码
         5. BPE decode → text
         """
+        # 1.7b audio_encoder 期望 2D [128, nb_frames]，0.6b 期望 3D [1, 128, nb_frames]
+        if self._model_size == "1.7b" and mel.ndim == 3 and mel.shape[0] == 1:
+            mel = mel.squeeze(0)
         ae = list(self._audio_enc({"mel": mel}).values())[0]
         te = list(self._embedder({"input_ids": ids}).values())[0]
 
@@ -166,8 +169,12 @@ class OpenVINOASREngine:
         gen_tokens: list[int] = []
 
         if self._model_size == "1.7b":
-            out = self._dec_req.infer({0: combined, "position_ids": pos})
-            logits = list(out.values())[0]
+            out = self._dec_req.infer({"input_embeds": combined, "position_ids": pos})
+            out_vals = list(out.values())
+            # [0]=logits, [1]=past_keys(stack_1), [2]=past_values(stack)
+            logits = out_vals[0]
+            past_keys = out_vals[1]
+            past_values = out_vals[2]
             next_token = int(np.argmax(logits[0, -1, :]))
             cur_pos = seq_len
 
@@ -179,10 +186,15 @@ class OpenVINOASREngine:
                     {"input_ids": np.array([[next_token]], dtype=np.int64)}
                 ).values())[0]
                 out = kv_req.infer({
-                    0: emb,
-                    "position_ids": np.array([[cur_pos]], dtype=np.int64),
+                    "new_embed": emb,
+                    "new_pos": np.array([[cur_pos]], dtype=np.int64),
+                    "past_keys": past_keys,
+                    "past_values": past_values,
                 })
-                logits = list(out.values())[0]
+                out_vals = list(out.values())
+                logits = out_vals[0]
+                past_keys = out_vals[1]
+                past_values = out_vals[2]
                 next_token = int(np.argmax(logits[0, -1, :]))
                 cur_pos += 1
         else:
