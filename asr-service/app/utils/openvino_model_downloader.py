@@ -63,8 +63,6 @@ def _is_model_complete(model_dir: str) -> bool:
         "decoder_model.xml",
         "decoder_model.bin",
         "vocab.json",
-        "prompt_template.json",
-        "mel_filters.npy",
     ]
 
     for fname in required_files:
