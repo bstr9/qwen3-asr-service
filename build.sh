@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-IMAGE_NAME="qwen3-asr-service"
+IMAGE_NAME="lancelrq/qwen3-asr-service"
 VERSION="${IMAGE_VERSION:-latest}"
 
 echo "Building ${IMAGE_NAME}:${VERSION} ..."

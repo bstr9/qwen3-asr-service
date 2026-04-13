@@ -1,7 +1,10 @@
 services:
   asr:
-    image: qwen3-asr-service:latest
-    # build: .  # 如需本地构建，取消此行注释
+    image: lancelrq/qwen3-asr-service:latest
+    # build:
+    #   context: .
+    #   tags:
+    #     - lancelrq/qwen3-asr-service:latest
     ports:
       - "8765:8765"
     volumes:
