@@ -475,3 +475,7 @@ asr-service/
 2. 取消正在处理的 ASR 任务（当前 chunk 完成后立即停止）
 3. 关闭工作线程和线程池
 4. 清理临时文件
+
+---
+
+如果这个项目对你有帮助，欢迎给 [GitHub 仓库](https://github.com/LanceLRQ/qwen3-asr-service) 和 [Docker Hub](https://hub.docker.com/r/lancelrq/qwen3-asr-service) 点个 ⭐，你的支持是项目持续更新的动力！

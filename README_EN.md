@@ -475,3 +475,7 @@ The service supports `Ctrl+C` for graceful shutdown. Upon pressing:
 2. Cancels in-progress ASR tasks (stops immediately after current chunk completes)
 3. Shuts down worker threads and thread pool
 4. Cleans up temporary files
+
+---
+
+If you find this project helpful, please consider giving a ⭐ on [GitHub](https://github.com/LanceLRQ/qwen3-asr-service) and [Docker Hub](https://hub.docker.com/r/lancelrq/qwen3-asr-service) — it really helps!

@@ -197,6 +197,8 @@ curl http://localhost:8765/v1/health
 
 [GitHub: qwen3-asr-service](https://github.com/LanceLRQ/qwen3-asr-service)
 
+如果这个项目对你有帮助，欢迎给 [GitHub 仓库](https://github.com/LanceLRQ/qwen3-asr-service) 和 [Docker Hub](https://hub.docker.com/r/lancelrq/qwen3-asr-service) 点个 ⭐，你的支持是项目持续更新的动力！
+
 ---
 
 A ready-to-use long-form speech recognition API service based on Qwen3-ASR, supporting both GPU (CUDA) and CPU (OpenVINO INT8) inference.
@@ -393,3 +395,5 @@ curl http://localhost:8765/v1/health
 ### Source Code
 
 [GitHub: qwen3-asr-service](https://github.com/LanceLRQ/qwen3-asr-service)
+
+If you find this project helpful, please consider giving a ⭐ on [GitHub](https://github.com/LanceLRQ/qwen3-asr-service) and [Docker Hub](https://hub.docker.com/r/lancelrq/qwen3-asr-service) — it really helps!
