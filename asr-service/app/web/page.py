@@ -106,6 +106,45 @@ h1 { text-align: center; margin-bottom: 24px; color: #1a1a2e; font-size: 1.6em; 
   padding: 8px 16px; cursor: pointer; font-size: 0.85em; margin-left: 8px;
 }
 .download-btn:hover { background: #059669; }
+
+/* 任务列表 */
+.task-list-toggle {
+  background: none; border: 1px solid #cbd5e1; border-radius: 10px;
+  padding: 12px 16px; cursor: pointer; font-size: 0.9em; color: #475569;
+  width: 100%; text-align: left; display: flex; justify-content: space-between;
+  align-items: center; margin-bottom: 12px;
+}
+.task-list-toggle:hover { background: #f8fafc; }
+.task-list-area { display: none; }
+.task-filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.task-filter-btn {
+  background: #f1f5f9; border: none; border-radius: 6px; padding: 5px 12px;
+  font-size: 0.82em; color: #475569; cursor: pointer; transition: all .15s;
+}
+.task-filter-btn:hover { background: #e2e8f0; }
+.task-filter-btn.active { background: #6366f1; color: #fff; }
+.task-table {
+  width: 100%; border-collapse: collapse; font-size: 0.85em;
+}
+.task-table th {
+  text-align: left; padding: 8px 10px; border-bottom: 2px solid #e2e8f0;
+  color: #64748b; font-weight: 600; font-size: 0.82em;
+}
+.task-table td {
+  padding: 8px 10px; border-bottom: 1px solid #f1f5f9;
+}
+.task-table tr { cursor: pointer; transition: background .1s; }
+.task-table tbody tr:hover { background: #f8fafc; }
+.status-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 0.8em; font-weight: 500;
+}
+.status-pending { background: #fef3c7; color: #92400e; }
+.status-processing { background: #dbeafe; color: #1e40af; }
+.status-completed { background: #d1fae5; color: #065f46; }
+.status-failed { background: #fee2e2; color: #991b1b; }
+.status-cancelled { background: #f1f5f9; color: #475569; }
+.task-empty { text-align: center; padding: 24px; color: #94a3b8; font-size: 0.9em; }
 </style>
 </head>
 <body>
@@ -174,6 +213,27 @@ h1 { text-align: center; margin-bottom: 24px; color: #1a1a2e; font-size: 1.6em; 
       <button class="download-btn" id="downloadBtn">下载 JSON</button>
       <div class="json-content" id="jsonContent"></div>
     </div>
+  </div>
+
+  <!-- 任务列表 -->
+  <button class="task-list-toggle" id="taskListToggle">
+    <span>任务列表</span>
+    <span id="taskListArrow">&#9660;</span>
+  </button>
+  <div class="task-list-area" id="taskListArea">
+    <div class="task-filters" id="taskFilters">
+      <button class="task-filter-btn active" data-status="">全部</button>
+      <button class="task-filter-btn" data-status="pending">排队中</button>
+      <button class="task-filter-btn" data-status="processing">处理中</button>
+      <button class="task-filter-btn" data-status="completed">已完成</button>
+      <button class="task-filter-btn" data-status="failed">失败</button>
+      <button class="task-filter-btn" data-status="cancelled">已取消</button>
+    </div>
+    <table class="task-table">
+      <thead><tr><th>任务 ID</th><th>状态</th><th>进度</th><th>创建时间</th></tr></thead>
+      <tbody id="taskTableBody"></tbody>
+    </table>
+    <div class="task-empty" id="taskEmpty" style="display:none;">暂无任务</div>
   </div>
 </div>
 
@@ -393,6 +453,62 @@ h1 { text-align: center; margin-bottom: 24px; color: #1a1a2e; font-size: 1.6em; 
     a.click();
     URL.revokeObjectURL(a.href);
   });
+
+  // === 任务列表 ===
+  const taskListToggle = $('taskListToggle'), taskListArea = $('taskListArea');
+  const taskListArrow = $('taskListArrow'), taskFilters = $('taskFilters');
+  const taskTableBody = $('taskTableBody'), taskEmpty = $('taskEmpty');
+  let currentFilter = '';
+  let taskListOpen = false;
+
+  const statusLabels = { pending: '排队中', processing: '处理中', completed: '已完成', failed: '失败', cancelled: '已取消' };
+
+  taskListToggle.addEventListener('click', () => {
+    taskListOpen = !taskListOpen;
+    taskListArea.style.display = taskListOpen ? 'block' : 'none';
+    taskListArrow.innerHTML = taskListOpen ? '&#9650;' : '&#9660;';
+    if (taskListOpen) loadTaskList();
+  });
+
+  taskFilters.addEventListener('click', e => {
+    if (!e.target.classList.contains('task-filter-btn')) return;
+    taskFilters.querySelectorAll('.task-filter-btn').forEach(b => b.classList.remove('active'));
+    e.target.classList.add('active');
+    currentFilter = e.target.dataset.status;
+    loadTaskList();
+  });
+
+  async function loadTaskList() {
+    const url = '/v1/tasks' + (currentFilter ? '?status=' + currentFilter : '');
+    try {
+      const res = await fetch(url, { headers: authHeaders() });
+      const data = await res.json();
+      taskTableBody.innerHTML = '';
+      if (!data.tasks || data.tasks.length === 0) {
+        taskEmpty.style.display = 'block';
+        return;
+      }
+      taskEmpty.style.display = 'none';
+      data.tasks.forEach(t => {
+        const tr = document.createElement('tr');
+        const pct = Math.round((t.progress || 0) * 100);
+        const shortId = t.task_id.substring(0, 8) + '...';
+        const time = t.created_at ? t.created_at.replace('T', ' ').substring(0, 19) : '--';
+        tr.innerHTML =
+          '<td title="' + t.task_id + '">' + shortId + '</td>' +
+          '<td><span class="status-badge status-' + t.status + '">' + (statusLabels[t.status] || t.status) + '</span></td>' +
+          '<td>' + pct + '%</td>' +
+          '<td>' + time + '</td>';
+        tr.addEventListener('click', () => {
+          window.open('/v1/tasks/' + t.task_id, '_blank');
+        });
+        taskTableBody.appendChild(tr);
+      });
+    } catch (e) {
+      taskEmpty.textContent = '加载失败: ' + e.message;
+      taskEmpty.style.display = 'block';
+    }
+  }
 })();
 </script>
 </body>
