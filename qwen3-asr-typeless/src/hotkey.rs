@@ -30,8 +30,6 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 #[cfg(target_os = "linux")]
-use std::collections::HashSet;
-#[cfg(target_os = "linux")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
@@ -115,14 +113,14 @@ impl HotkeyDef {
 
 #[cfg(target_os = "linux")]
 impl HotkeyDef {
-    fn matches_key(&self, key: rdev::Key, pressed_modifiers: &HashSet<rdev::Key>) -> bool {
+    fn matches_evdev(&self, code: u16, pressed_modifiers: &[u16]) -> bool {
         match self {
-            HotkeyDef::Simple { vk } => vk_to_rdev_key(*vk) == Some(key),
+            HotkeyDef::Simple { vk } => vk_to_evdev_code(*vk) == Some(code),
             HotkeyDef::Combo { modifier_vk, key_vk } => {
-                if vk_to_rdev_key(*key_vk) != Some(key) {
+                if vk_to_evdev_code(*key_vk) != Some(code) {
                     return false;
                 }
-                vk_to_rdev_key(*modifier_vk)
+                vk_to_evdev_code(*modifier_vk)
                     .map(|mk| pressed_modifiers.contains(&mk))
                     .unwrap_or(false)
             }
@@ -205,81 +203,35 @@ static PTT_DEF: OnceLock<HotkeyDef> = OnceLock::new();
 static HANDSFREE_DEF: OnceLock<HotkeyDef> = OnceLock::new();
 static CANCEL_DEF: OnceLock<HotkeyDef> = OnceLock::new();
 
-// ── Linux: VK → rdev::Key mapping ──────────────────────────────────────
+// ── Linux: VK → evdev key code mapping ──────────────────────────────────
 
 #[cfg(target_os = "linux")]
-fn vk_to_rdev_key(vk: u32) -> Option<rdev::Key> {
+fn vk_to_evdev_code(vk: u32) -> Option<u16> {
     match vk {
-        0x41 => Some(rdev::Key::KeyA),
-        0x42 => Some(rdev::Key::KeyB),
-        0x43 => Some(rdev::Key::KeyC),
-        0x44 => Some(rdev::Key::KeyD),
-        0x45 => Some(rdev::Key::KeyE),
-        0x46 => Some(rdev::Key::KeyF),
-        0x47 => Some(rdev::Key::KeyG),
-        0x48 => Some(rdev::Key::KeyH),
-        0x49 => Some(rdev::Key::KeyI),
-        0x4A => Some(rdev::Key::KeyJ),
-        0x4B => Some(rdev::Key::KeyK),
-        0x4C => Some(rdev::Key::KeyL),
-        0x4D => Some(rdev::Key::KeyM),
-        0x4E => Some(rdev::Key::KeyN),
-        0x4F => Some(rdev::Key::KeyO),
-        0x50 => Some(rdev::Key::KeyP),
-        0x51 => Some(rdev::Key::KeyQ),
-        0x52 => Some(rdev::Key::KeyR),
-        0x53 => Some(rdev::Key::KeyS),
-        0x54 => Some(rdev::Key::KeyT),
-        0x55 => Some(rdev::Key::KeyU),
-        0x56 => Some(rdev::Key::KeyV),
-        0x57 => Some(rdev::Key::KeyW),
-        0x58 => Some(rdev::Key::KeyX),
-        0x59 => Some(rdev::Key::KeyY),
-        0x5A => Some(rdev::Key::KeyZ),
-        0x70 => Some(rdev::Key::F1),
-        0x71 => Some(rdev::Key::F2),
-        0x72 => Some(rdev::Key::F3),
-        0x73 => Some(rdev::Key::F4),
-        0x74 => Some(rdev::Key::F5),
-        0x75 => Some(rdev::Key::F6),
-        0x76 => Some(rdev::Key::F7),
-        0x77 => Some(rdev::Key::F8),
-        0x78 => Some(rdev::Key::F9),
-        0x79 => Some(rdev::Key::F10),
-        0x7A => Some(rdev::Key::F11),
-        0x7B => Some(rdev::Key::F12),
-        0x30 => Some(rdev::Key::Num0),
-        0x31 => Some(rdev::Key::Num1),
-        0x32 => Some(rdev::Key::Num2),
-        0x33 => Some(rdev::Key::Num3),
-        0x34 => Some(rdev::Key::Num4),
-        0x35 => Some(rdev::Key::Num5),
-        0x36 => Some(rdev::Key::Num6),
-        0x37 => Some(rdev::Key::Num7),
-        0x38 => Some(rdev::Key::Num8),
-        0x39 => Some(rdev::Key::Num9),
-        0x20 => Some(rdev::Key::Space),
-        0x1B => Some(rdev::Key::Escape),
-        0x0D => Some(rdev::Key::Return),
-        0x09 => Some(rdev::Key::Tab),
-        0x08 => Some(rdev::Key::Backspace),
-        0x2E => Some(rdev::Key::Delete),
-        0x2D => Some(rdev::Key::Insert),
-        0x24 => Some(rdev::Key::Home),
-        0x23 => Some(rdev::Key::End),
-        0x21 => Some(rdev::Key::PageUp),
-        0x22 => Some(rdev::Key::PageDown),
-        0x26 => Some(rdev::Key::UpArrow),
-        0x28 => Some(rdev::Key::DownArrow),
-        0x25 => Some(rdev::Key::LeftArrow),
-        0x27 => Some(rdev::Key::RightArrow),
-        0xA5 => Some(rdev::Key::AltGr),
-        0xA4 => Some(rdev::Key::Alt),
-        0xA3 => Some(rdev::Key::ControlRight),
-        0xA1 => Some(rdev::Key::ShiftRight),
-        0xA2 => Some(rdev::Key::ControlLeft),
-        0xA0 => Some(rdev::Key::ShiftLeft),
-        0x5B => Some(rdev::Key::MetaLeft),
+        // Letters
+        0x41 => Some(0x1E), 0x42 => Some(0x30), 0x43 => Some(0x2E), 0x44 => Some(0x20),
+        0x45 => Some(0x12), 0x46 => Some(0x21), 0x47 => Some(0x22), 0x48 => Some(0x23),
+        0x49 => Some(0x17), 0x4A => Some(0x24), 0x4B => Some(0x25), 0x4C => Some(0x26),
+        0x4D => Some(0x32), 0x4E => Some(0x31), 0x4F => Some(0x18), 0x50 => Some(0x19),
+        0x51 => Some(0x10), 0x52 => Some(0x13), 0x53 => Some(0x1F), 0x54 => Some(0x14),
+        0x55 => Some(0x16), 0x56 => Some(0x2F), 0x57 => Some(0x11), 0x58 => Some(0x2D),
+        0x59 => Some(0x15), 0x5A => Some(0x2C),
+        // F-keys
+        0x70 => Some(0x3B), 0x71 => Some(0x3C), 0x72 => Some(0x3D), 0x73 => Some(0x3E),
+        0x74 => Some(0x3F), 0x75 => Some(0x40), 0x76 => Some(0x41), 0x77 => Some(0x42),
+        0x78 => Some(0x43), 0x79 => Some(0x44), 0x7A => Some(0x45), 0x7B => Some(0x46),
+        // Digits
+        0x30 => Some(0x0B), 0x31 => Some(0x02), 0x32 => Some(0x03), 0x33 => Some(0x04),
+        0x34 => Some(0x05), 0x35 => Some(0x06), 0x36 => Some(0x07), 0x37 => Some(0x08),
+        0x38 => Some(0x09), 0x39 => Some(0x0A),
+        // Special keys
+        0x20 => Some(0x39), 0x1B => Some(0x01), 0x0D => Some(0x1C), 0x09 => Some(0x0F),
+        0x08 => Some(0x0E), 0x2E => Some(0x6F), 0x2D => Some(0x6E), 0x24 => Some(0x66),
+        0x23 => Some(0x6B), 0x21 => Some(0x68), 0x22 => Some(0x6D),
+        0x26 => Some(0x67), 0x28 => Some(0x6C), 0x25 => Some(0x69), 0x27 => Some(0x6A),
+        // Modifiers
+        0xA5 => Some(0x64), 0xA4 => Some(0x38), 0xA3 => Some(0x61), 0xA2 => Some(0x1D),
+        0xA1 => Some(0x36), 0xA0 => Some(0x2A), 0x5B => Some(0x7D),
         _ => None,
     }
 }
@@ -496,6 +448,17 @@ pub use windows_impl::HotkeyManager;
 mod linux_impl {
     use super::*;
 
+    const EV_KEY: u16 = 0x01;
+    const KEY_LEFTSHIFT: u16 = 0x2A;
+    const KEY_RIGHTSHIFT: u16 = 0x36;
+    const KEY_LEFTCTRL: u16 = 0x1D;
+    const KEY_RIGHTCTRL: u16 = 0x61;
+    const KEY_LEFTALT: u16 = 0x38;
+    const KEY_RIGHTALT: u16 = 0x64;
+    const KEY_LEFTMETA: u16 = 0x7D;
+    const KEY_RIGHTMETA: u16 = 0x7E;
+    const KEY_SPACE: u16 = 0x39;
+
     pub struct HotkeyManager {
         thread_handle: Option<std::thread::JoinHandle<()>>,
         running: Arc<AtomicBool>,
@@ -541,81 +504,84 @@ mod linux_impl {
             let running = self.running.clone();
 
             let handle = std::thread::Builder::new()
-                .name("hotkey-hook".into())
+                .name("hotkey-evdev".into())
                 .spawn(move || {
-                    let pressed_modifiers: std::sync::Mutex<HashSet<rdev::Key>> =
-                        std::sync::Mutex::new(HashSet::new());
+                    let mut devices: Vec<evdev::Device> = evdev::enumerate()
+                        .filter(|(_, dev)| {
+                            dev.supported_keys().map_or(false, |keys| {
+                                keys.contains(evdev::KeyCode(KEY_SPACE))
+                            })
+                        })
+                        .map(|(_, dev)| dev)
+                        .collect();
 
-                    // X11 auto-repeat emits KeyPress→KeyRelease→KeyPress→KeyRelease...
-                    // Track physical key state to suppress repeat events.
-                    let key_state: std::sync::Mutex<HashSet<rdev::Key>> =
-                        std::sync::Mutex::new(HashSet::new());
+                    if devices.is_empty() {
+                        log::error!("No keyboard devices found via evdev");
+                        return;
+                    }
 
-                    let callback_fn = move |event: rdev::Event| {
-                        if !running.load(Ordering::Relaxed) {
-                            return;
-                        }
+                    log::info!("evdev: monitoring {} keyboard device(s)", devices.len());
 
-                        let (key, is_down) = match event.event_type {
-                            rdev::EventType::KeyPress(k) => (k, true),
-                            rdev::EventType::KeyRelease(k) => (k, false),
-                            _ => return,
-                        };
+                    let mut pressed_modifiers: Vec<u16> = Vec::new();
 
-                        {
-                            let Ok(mut state) = key_state.lock() else { return };
-                            if is_down {
-                                if state.contains(&key) { return; }
-                                state.insert(key);
-                            } else {
-                                if !state.contains(&key) { return; }
-                                state.remove(&key);
-                            }
-                        }
+                    const MODIFIER_CODES: &[u16] = &[
+                        KEY_LEFTSHIFT, KEY_RIGHTSHIFT,
+                        KEY_LEFTCTRL, KEY_RIGHTCTRL,
+                        KEY_LEFTALT, KEY_RIGHTALT,
+                        KEY_LEFTMETA, KEY_RIGHTMETA,
+                    ];
 
-                        let is_modifier = matches!(
-                            key,
-                            rdev::Key::ShiftLeft
-                                | rdev::Key::ShiftRight
-                                | rdev::Key::ControlLeft
-                                | rdev::Key::ControlRight
-                                | rdev::Key::Alt
-                                | rdev::Key::AltGr
-                                | rdev::Key::MetaLeft
-                                | rdev::Key::MetaRight
-                        );
+                    while running.load(Ordering::Relaxed) {
+                        for dev in &mut devices {
+                            let events = match dev.fetch_events() {
+                                Ok(ev) => ev,
+                                Err(e) => {
+                                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                                        log::warn!("evdev fetch error: {:?}", e);
+                                    }
+                                    continue;
+                                }
+                            };
 
-                        if is_modifier {
-                            if let Ok(mut mods) = pressed_modifiers.lock() {
-                                if is_down {
-                                    mods.insert(key);
-                                } else {
-                                    mods.remove(&key);
+                            for event in events {
+                                if event.event_type().0 != EV_KEY {
+                                    continue;
+                                }
+
+                                let code = event.code();
+                                let value = event.value();
+                                // value: 1=down, 0=up, 2=repeat
+                                if value == 2 { continue; }
+                                let is_down = value == 1;
+
+                                if MODIFIER_CODES.contains(&code) {
+                                    if is_down {
+                                        if !pressed_modifiers.contains(&code) {
+                                            pressed_modifiers.push(code);
+                                        }
+                                    } else {
+                                        pressed_modifiers.retain(|&c| c != code);
+                                    }
+                                }
+
+                                let hotkey_event = check_hotkey_evdev(
+                                    PTT_DEF.get(),
+                                    HANDSFREE_DEF.get(),
+                                    CANCEL_DEF.get(),
+                                    code,
+                                    &pressed_modifiers,
+                                    is_down,
+                                );
+
+                                if let Some(evt) = hotkey_event {
+                                    if let Some(cb) = CALLBACK.get() {
+                                        cb(evt);
+                                    }
                                 }
                             }
                         }
 
-                        let event = match pressed_modifiers.lock() {
-                            Ok(guard) => check_hotkey_linux(
-                                PTT_DEF.get(),
-                                HANDSFREE_DEF.get(),
-                                CANCEL_DEF.get(),
-                                key,
-                                &*guard,
-                                is_down,
-                            ),
-                            Err(_) => None,
-                        };
-
-                        if let Some(evt) = event {
-                            if let Some(cb) = CALLBACK.get() {
-                                cb(evt);
-                            }
-                        }
-                    };
-
-                    if let Err(e) = rdev::listen(callback_fn) {
-                        log::error!("rdev::listen error: {:?}", e);
+                        std::thread::sleep(std::time::Duration::from_millis(1));
                     }
                 })
                 .context("Failed to spawn hotkey listener thread")?;
@@ -641,17 +607,17 @@ mod linux_impl {
         }
     }
 
-    fn check_hotkey_linux(
+    fn check_hotkey_evdev(
         ptt_def: Option<&HotkeyDef>,
         handsfree_def: Option<&HotkeyDef>,
         cancel_def: Option<&HotkeyDef>,
-        key: rdev::Key,
-        pressed_modifiers: &HashSet<rdev::Key>,
+        code: u16,
+        pressed_modifiers: &[u16],
         is_down: bool,
     ) -> Option<HotkeyEvent> {
         ptt_def
             .and_then(|d| {
-                if d.matches_key(key, pressed_modifiers) {
+                if d.matches_evdev(code, pressed_modifiers) {
                     Some(if is_down { HotkeyEvent::KeyDown(HotkeyKind::Ptt) } else { HotkeyEvent::KeyUp(HotkeyKind::Ptt) })
                 } else {
                     None
@@ -659,7 +625,7 @@ mod linux_impl {
             })
             .or_else(|| {
                 handsfree_def.and_then(|d| {
-                    if d.matches_key(key, pressed_modifiers) {
+                    if d.matches_evdev(code, pressed_modifiers) {
                         Some(if is_down { HotkeyEvent::KeyDown(HotkeyKind::HandsFree) } else { HotkeyEvent::KeyUp(HotkeyKind::HandsFree) })
                     } else {
                         None
@@ -668,7 +634,7 @@ mod linux_impl {
             })
             .or_else(|| {
                 cancel_def.and_then(|d| {
-                    if d.matches_key(key, pressed_modifiers) {
+                    if d.matches_evdev(code, pressed_modifiers) {
                         Some(if is_down { HotkeyEvent::KeyDown(HotkeyKind::Cancel) } else { HotkeyEvent::KeyUp(HotkeyKind::Cancel) })
                     } else {
                         None
