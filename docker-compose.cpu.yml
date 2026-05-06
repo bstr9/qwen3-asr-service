@@ -8,8 +8,8 @@ services:
     #     - lancelrq/qwen3-asr-service:latest-cpu
     ports:
       - "8765:8765"
-    environment:
-      # - ASR_API_KEY=sk-your-key-here   # 设置后启用 Bearer token 认证
+    # environment:
+    #   ASR_API_KEY: sk-your-key-here   # 设置后启用 Bearer token 认证
     volumes:
       - ./asr-service/models:/app/models
       - ./asr-service/logs:/app/logs

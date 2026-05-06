@@ -146,3 +146,16 @@ docs/plan/*
 # models & env
 asr-service/models
 asr-service/bin
+
+# AI agent workspace
+.agent/
+
+# Sub-projects (separate repos)
+qwen3-asr-android/
+qwen3-asr-typeless/
+
+# Build artifacts & cache
+target/
+build/
+*.pyc
+__pycache__/
