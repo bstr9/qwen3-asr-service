@@ -1,9 +1,5 @@
-asr-service/venv/
-asr-service/models/
-asr-service/cache/
-asr-service/logs/
-asr-service/bin/
-asr-service/__pycache__/
+asr-service/
+qwen3-asr-android/
 *.pyc
 *.pyo
 .git
@@ -11,3 +7,9 @@ asr-service/__pycache__/
 docs/
 LICENSE
 README.md
+README_EN.md
+DOCKERHUB.md
+docker-compose*.yml
+Dockerfile
+Dockerfile.cpu
+build.sh

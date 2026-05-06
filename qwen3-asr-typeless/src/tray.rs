@@ -1,36 +1,13 @@
-//! System tray icon using Windows Shell_NotifyIconW API.
+//! System tray icon with platform-specific implementations.
 //!
-//! Provides a system tray icon with a context menu for:
-//! - Opening the main window
-//! - Toggling recording mode (PTT / Hands-free)
-//! - Opening history
-//! - Opening settings
-//! - Quitting the application
+//! - Windows: Shell_NotifyIconW API with a hidden message window.
+//! - Linux: ksni (KDE StatusNotifierItem / AppIndicator).
 
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Shell::*;
-use windows::Win32::UI::WindowsAndMessaging::*;
 
-// --- Constants ---
-
-/// Custom message sent by the tray icon callback.
-const WM_TRAYICON: u32 = WM_APP + 1;
-
-/// Menu item IDs.
-const IDM_TOGGLE_MODE: usize = 1001;
-const IDM_SHOW_HISTORY: usize = 1002;
-const IDM_SHOW_SETTINGS: usize = 1003;
-const IDM_ABOUT: usize = 1004;
-const IDM_QUIT: usize = 1005;
-const IDM_OPEN: usize = 1006;
-
-// --- Types ---
+// --- Shared types ---
 
 /// Callback for tray menu actions.
 pub(crate) type TrayCallback = Box<dyn Fn(TrayAction) + Send + Sync>;
@@ -55,12 +32,40 @@ pub enum TrayState {
     Disconnected,
 }
 
-/// Manages the system tray icon and its context menu.
-///
-/// Note: `TrayManager` is not `Send` because `NOTIFYICONDATAW` contains
-/// `HWND` (a raw pointer). It is stored as a leaked `Box` behind a raw
-/// pointer inside the global `TRAY_MANAGER` and only accessed from the
-/// UI thread inside the window procedure.
+// ===========================================================================
+// Windows implementation
+// ===========================================================================
+
+#[cfg(target_os = "windows")]
+use windows::core::PCWSTR;
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::*;
+#[cfg(target_os = "windows")]
+use windows::Win32::Graphics::Gdi::*;
+#[cfg(target_os = "windows")]
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::Shell::*;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
+
+#[cfg(target_os = "windows")]
+const WM_TRAYICON: u32 = WM_APP + 1;
+
+#[cfg(target_os = "windows")]
+const IDM_TOGGLE_MODE: usize = 1001;
+#[cfg(target_os = "windows")]
+const IDM_SHOW_HISTORY: usize = 1002;
+#[cfg(target_os = "windows")]
+const IDM_SHOW_SETTINGS: usize = 1003;
+#[cfg(target_os = "windows")]
+const IDM_ABOUT: usize = 1004;
+#[cfg(target_os = "windows")]
+const IDM_QUIT: usize = 1005;
+#[cfg(target_os = "windows")]
+const IDM_OPEN: usize = 1006;
+
+#[cfg(target_os = "windows")]
 pub struct TrayManager {
     hwnd: HWND,
     nid: NOTIFYICONDATAW,
@@ -74,16 +79,14 @@ pub struct TrayManager {
     disconnected_icon: HICON,
 }
 
+#[cfg(target_os = "windows")]
 impl TrayManager {
-    /// Initialize tray icon data. The `hwnd` is the message window that
-    /// receives tray notifications.
     pub fn new(hwnd: HWND) -> Result<Self> {
         let idle_icon = unsafe { LoadIconW(None, IDI_APPLICATION)? };
 
-        // Create colored 16x16 icons for different states
-        let recording_icon = create_color_icon(0, 200, 80);    // green
-        let processing_icon = create_color_icon(66, 133, 244);  // blue
-        let disconnected_icon = create_color_icon(255, 193, 7); // yellow
+        let recording_icon = create_color_icon(0, 200, 80);
+        let processing_icon = create_color_icon(66, 133, 244);
+        let disconnected_icon = create_color_icon(255, 193, 7);
 
         let mut nid: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
@@ -92,10 +95,8 @@ impl TrayManager {
         nid.uCallbackMessage = WM_TRAYICON;
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
 
-        // Default icon
         nid.hIcon = idle_icon;
 
-        // Default tooltip
         let tooltip = encode_wide("Qwen3-ASR Typeless");
         let copy_len = tooltip.len().min(128);
         nid.szTip[..copy_len].copy_from_slice(&tooltip[..copy_len]);
@@ -114,7 +115,6 @@ impl TrayManager {
         })
     }
 
-    /// Add the tray icon (NIM_ADD).
     pub fn show(&mut self) -> Result<()> {
         if self.visible.load(Ordering::SeqCst) {
             return Ok(());
@@ -127,9 +127,6 @@ impl TrayManager {
         Ok(())
     }
 
-
-
-    /// Show a balloon notification from the tray icon.
     pub fn show_balloon(&mut self, title: &str, message: &str) -> Result<()> {
         let mut nid: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
@@ -151,7 +148,6 @@ impl TrayManager {
         Ok(())
     }
 
-    /// Update tooltip text (NIM_MODIFY).
     pub fn set_tooltip(&mut self, text: &str) -> Result<()> {
         let tooltip = encode_wide(text);
         let copy_len = tooltip.len().min(128);
@@ -166,7 +162,6 @@ impl TrayManager {
         Ok(())
     }
 
-    /// Create and show a popup context menu at the cursor position.
     pub fn show_context_menu(&self) -> Result<()> {
         unsafe {
             let h_menu = CreatePopupMenu()?;
@@ -220,7 +215,6 @@ impl TrayManager {
             let mut point = POINT { x: 0, y: 0 };
             GetCursorPos(&mut point)?;
 
-            // Required for the menu to dismiss properly
             let _ = SetForegroundWindow(self.hwnd);
 
             let _ = TrackPopupMenu(
@@ -238,19 +232,12 @@ impl TrayManager {
         Ok(())
     }
 
-    /// Set the action callback.
     pub fn set_callback(&mut self, callback: TrayCallback) {
         if let Ok(mut cb) = self.callback.lock() {
             *cb = Some(callback);
         }
     }
 
-    /// Handle tray notification messages.
-    ///
-    /// - When `lparam == WM_RBUTTONUP`, show context menu.
-    /// - When `lparam == WM_LBUTTONDBLCLK`, open main window.
-    /// - When `lparam == WM_LBUTTONUP`, toggle mode.
-    /// - When `msg` comes from `WM_COMMAND` (menu item selected), invoke callback.
     pub fn handle_message(&self, msg: u32, wparam: WPARAM, lparam: LPARAM) {
         if msg == WM_TRAYICON {
             let event = lparam.0 as u32;
@@ -285,7 +272,6 @@ impl TrayManager {
         }
     }
 
-    /// Update tooltip to show current mode.
     pub fn update_mode_display(&mut self, is_handsfree: bool) -> Result<()> {
         self.is_handsfree.store(is_handsfree, Ordering::SeqCst);
         let tooltip = if is_handsfree {
@@ -304,7 +290,6 @@ impl TrayManager {
         }
     }
 
-    /// Set the tray icon state, changing the icon color.
     pub fn set_state(&mut self, state: TrayState) -> Result<()> {
         if state == self.current_state {
             return Ok(());
@@ -327,6 +312,7 @@ impl TrayManager {
     }
 }
 
+#[cfg(target_os = "windows")]
 impl Drop for TrayManager {
     fn drop(&mut self) {
         if self.visible.load(Ordering::SeqCst) {
@@ -337,38 +323,28 @@ impl Drop for TrayManager {
     }
 }
 
-// --- Global tray manager for window procedure ---
+// --- Windows global tray ---
 
-/// Thread-safe wrapper for the global TrayManager.
-/// TrayManager is not Send (NOTIFYICONDATAW contains HWND), so we use
-/// a raw pointer. The pointer is only ever dereferenced on the UI thread
-/// inside the window procedure.
+#[cfg(target_os = "windows")]
 struct GlobalTray {
     ptr: *mut TrayManager,
 }
 
+#[cfg(target_os = "windows")]
 unsafe impl Send for GlobalTray {}
+#[cfg(target_os = "windows")]
 unsafe impl Sync for GlobalTray {}
 
-/// Global reference to the TrayManager, used by the window procedure.
+#[cfg(target_os = "windows")]
 static TRAY_MANAGER: OnceLock<Mutex<Option<GlobalTray>>> = OnceLock::new();
 
-/// Sets the global tray manager reference. Call once after creating the TrayManager.
-///
-/// The TrayManager is boxed and leaked via `Box::into_raw`; the pointer remains
-/// valid until the application exits. This is intentional — the tray icon should
-/// persist for the entire lifetime of the application, and the OS will reclaim
-/// the memory on process exit. The `Drop` impl handles removing the tray icon.
+#[cfg(target_os = "windows")]
 pub fn set_global_tray(tray: Box<TrayManager>) {
     let ptr = Box::into_raw(tray);
-    // SAFETY: The leaked Box is intentionally never freed. The TrayManager's
-    // Drop impl removes the tray icon (NIM_DELETE), and the pointer is only
-    // dereferenced on the UI thread inside the window procedure.
     let _ = TRAY_MANAGER.get_or_init(|| Mutex::new(Some(GlobalTray { ptr })));
 }
 
-/// Update the mode display on the global tray icon.
-/// Must only be called from the UI thread.
+#[cfg(target_os = "windows")]
 pub fn update_global_mode_display(is_handsfree: bool) {
     if let Some(global) = TRAY_MANAGER.get() {
         if let Ok(mut guard) = global.lock() {
@@ -380,8 +356,7 @@ pub fn update_global_mode_display(is_handsfree: bool) {
     }
 }
 
-/// Show a balloon notification from the global tray icon.
-/// Must only be called from the UI thread.
+#[cfg(target_os = "windows")]
 pub fn show_global_balloon(title: &str, message: &str) {
     if let Some(global) = TRAY_MANAGER.get() {
         if let Ok(mut guard) = global.lock() {
@@ -395,8 +370,7 @@ pub fn show_global_balloon(title: &str, message: &str) {
     }
 }
 
-/// Set the global tray icon state (changes icon color).
-/// Must only be called from the UI thread.
+#[cfg(target_os = "windows")]
 pub fn set_global_state(state: TrayState) {
     if let Some(global) = TRAY_MANAGER.get() {
         if let Ok(mut guard) = global.lock() {
@@ -410,7 +384,7 @@ pub fn set_global_state(state: TrayState) {
     }
 }
 
-/// Creates a hidden window for receiving tray messages.
+#[cfg(target_os = "windows")]
 pub fn create_tray_window() -> Result<HWND> {
     unsafe {
         let class_name = encode_wide_null("Qwen3ASRTypelessTrayClass");
@@ -449,7 +423,7 @@ pub fn create_tray_window() -> Result<HWND> {
     }
 }
 
-/// Window procedure for the hidden tray message window.
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn tray_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -476,9 +450,9 @@ unsafe extern "system" fn tray_wnd_proc(
     }
 }
 
-// --- Utility ---
+// --- Windows utilities ---
 
-/// Create a 16x16 solid-color icon using GDI.
+#[cfg(target_os = "windows")]
 fn create_color_icon(r: u8, g: u8, b: u8) -> HICON {
     const SIZE: i32 = 16;
     unsafe {
@@ -486,7 +460,6 @@ fn create_color_icon(r: u8, g: u8, b: u8) -> HICON {
         let hdc = CreateCompatibleDC(hdc_screen);
         let _ = ReleaseDC(None, hdc_screen);
 
-        // COLORREF is 0x00BBGGRR
         let color = COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16));
         let hbm_color = CreateCompatibleBitmap(hdc_screen, SIZE, SIZE);
         SelectObject(hdc, hbm_color);
@@ -497,7 +470,6 @@ fn create_color_icon(r: u8, g: u8, b: u8) -> HICON {
         let _ = DeleteObject(brush);
         let _ = DeleteObject(hbm_color);
 
-        // Monochrome AND mask (all zeros = fully opaque)
         let hbm_mask = CreateBitmap(SIZE, SIZE, 1, 1, None);
 
         let icon_info = ICONINFO {
@@ -514,17 +486,240 @@ fn create_color_icon(r: u8, g: u8, b: u8) -> HICON {
     }
 }
 
-/// Encode a Rust string to a wide (UTF-16) vector without null terminator.
+#[cfg(target_os = "windows")]
 fn encode_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
-/// Encode a Rust string to a wide (UTF-16) vector with null terminator.
+#[cfg(target_os = "windows")]
 fn encode_wide_null(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// Extract the low-order word from a WPARAM value.
+#[cfg(target_os = "windows")]
 fn loword(wparam: u32) -> u32 {
     wparam & 0xFFFF
+}
+
+// ===========================================================================
+// Linux implementation
+// ===========================================================================
+
+#[cfg(target_os = "linux")]
+use ksni::menu::StandardItem;
+
+#[cfg(target_os = "linux")]
+struct TraySni {
+    callback: std::sync::Arc<Mutex<Option<TrayCallback>>>,
+    is_handsfree: AtomicBool,
+    icon_name: String,
+}
+
+#[cfg(target_os = "linux")]
+impl TraySni {
+    fn new(callback: std::sync::Arc<Mutex<Option<TrayCallback>>>) -> Self {
+        Self {
+            callback,
+            is_handsfree: AtomicBool::new(false),
+            icon_name: "audio-input-microphone".into(),
+        }
+    }
+
+    fn invoke_callback(&self, action: TrayAction) {
+        if let Ok(cb) = self.callback.lock() {
+            if let Some(ref callback) = *cb {
+                callback(action);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl ksni::Tray for TraySni {
+    fn id(&self) -> String {
+        "qwen3-asr-typeless".into()
+    }
+
+    fn title(&self) -> String {
+        "Qwen3-ASR Typeless".into()
+    }
+
+    fn icon_name(&self) -> String {
+        self.icon_name.clone()
+    }
+
+    fn icon_theme_path(&self) -> String {
+        String::new()
+    }
+
+    fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+        let mode_text = if self.is_handsfree.load(Ordering::SeqCst) {
+            "Mode: Hands-free"
+        } else {
+            "Mode: Push-to-Talk"
+        };
+
+        vec![
+            StandardItem {
+                label: "Open".into(),
+                activate: Box::new(|this: &mut Self| {
+                    this.invoke_callback(TrayAction::ShowMainWindow);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: mode_text.into(),
+                activate: Box::new(|this: &mut Self| {
+                    this.invoke_callback(TrayAction::ToggleMode);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            ksni::MenuItem::Separator,
+            StandardItem {
+                label: "History".into(),
+                activate: Box::new(|this: &mut Self| {
+                    this.invoke_callback(TrayAction::ShowHistory);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: "Settings".into(),
+                activate: Box::new(|this: &mut Self| {
+                    this.invoke_callback(TrayAction::ShowSettings);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            ksni::MenuItem::Separator,
+            StandardItem {
+                label: "About".into(),
+                activate: Box::new(|this: &mut Self| {
+                    this.invoke_callback(TrayAction::About);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: "Quit".into(),
+                activate: Box::new(|this: &mut Self| {
+                    this.invoke_callback(TrayAction::Quit);
+                }),
+                ..Default::default()
+            }
+            .into(),
+        ]
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub struct TrayManager {
+    callback: std::sync::Arc<Mutex<Option<TrayCallback>>>,
+    is_handsfree: AtomicBool,
+    current_state: TrayState,
+    sni: Option<ksni::Handle<TraySni>>,
+}
+
+#[cfg(target_os = "linux")]
+impl TrayManager {
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            callback: std::sync::Arc::new(Mutex::new(None)),
+            is_handsfree: AtomicBool::new(false),
+            current_state: TrayState::Idle,
+            sni: None,
+        })
+    }
+
+    pub fn show(&mut self) -> Result<()> {
+        if self.sni.is_some() {
+            return Ok(());
+        }
+        let sni = TraySni::new(self.callback.clone());
+        let service = ksni::TrayService::new(sni);
+        let handle = service.handle();
+        service.spawn();
+        self.sni = Some(handle);
+        Ok(())
+    }
+
+    pub fn set_callback(&mut self, callback: TrayCallback) {
+        if let Ok(mut cb) = self.callback.lock() {
+            *cb = Some(callback);
+        }
+    }
+
+    pub fn update_mode_display(&mut self, is_handsfree: bool) -> Result<()> {
+        self.is_handsfree.store(is_handsfree, Ordering::SeqCst);
+        if let Some(ref handle) = self.sni {
+            handle.update(|sni| {
+                sni.is_handsfree.store(is_handsfree, Ordering::SeqCst);
+            });
+        }
+        Ok(())
+    }
+
+    pub fn show_balloon(&mut self, title: &str, message: &str) -> Result<()> {
+        log::info!("[Notification] {}: {}", title, message);
+        Ok(())
+    }
+
+    pub fn set_state(&mut self, state: TrayState) -> Result<()> {
+        if state == self.current_state {
+            return Ok(());
+        }
+        self.current_state = state;
+        let icon_name = match state {
+            TrayState::Idle => "audio-input-microphone",
+            TrayState::Recording => "media-record",
+            TrayState::Processing => "process-working",
+            TrayState::Disconnected => "dialog-warning",
+        };
+        if let Some(ref handle) = self.sni {
+            let icon = icon_name.to_string();
+            handle.update(move |sni| {
+                sni.icon_name = icon;
+            });
+        }
+        Ok(())
+    }
+}
+
+// --- Linux global tray ---
+
+#[cfg(target_os = "linux")]
+static TRAY_MANAGER: OnceLock<Mutex<TrayManager>> = OnceLock::new();
+
+#[cfg(target_os = "linux")]
+pub fn set_global_tray(tray: Box<TrayManager>) {
+    let _ = TRAY_MANAGER.get_or_init(|| Mutex::new(*tray));
+}
+
+#[cfg(target_os = "linux")]
+pub fn update_global_mode_display(is_handsfree: bool) {
+    if let Some(global) = TRAY_MANAGER.get() {
+        if let Ok(mut guard) = global.lock() {
+            let _ = guard.update_mode_display(is_handsfree);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn show_global_balloon(title: &str, message: &str) {
+    if let Some(global) = TRAY_MANAGER.get() {
+        if let Ok(mut guard) = global.lock() {
+            let _ = guard.show_balloon(title, message);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn set_global_state(state: TrayState) {
+    if let Some(global) = TRAY_MANAGER.get() {
+        if let Ok(mut guard) = global.lock() {
+            let _ = guard.set_state(state);
+        }
+    }
 }

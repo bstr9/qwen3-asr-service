@@ -1,7 +1,7 @@
 //! Internationalization (i18n) module.
 //!
 //! Provides simple key→string translation for Chinese (zh) and English (en).
-//! Language auto-detects from Windows system locale using `GetUserDefaultUILanguage`.
+//! Language auto-detects from system locale (Win32 API on Windows, POSIX env vars on Linux).
 
 use std::collections::HashMap;
 
@@ -14,15 +14,28 @@ pub enum Language {
 
 impl Language {
     /// Detect the system UI language using Win32 API.
+    #[cfg(target_os = "windows")]
     pub fn detect_system() -> Self {
-        // Use raw FFI to call GetUserDefaultUILanguage from kernel32.
-        // This avoids depending on a specific windows crate module path.
         extern "system" {
             fn GetUserDefaultUILanguage() -> u16;
         }
         let lang_id = unsafe { GetUserDefaultUILanguage() };
         let primary = lang_id & 0xFF;
         if primary == 0x04 {
+            Language::Zh
+        } else {
+            Language::En
+        }
+    }
+
+    /// Detect the system UI language from POSIX locale environment variables.
+    #[cfg(target_os = "linux")]
+    pub fn detect_system() -> Self {
+        let lang = std::env::var("LANG")
+            .or_else(|_| std::env::var("LC_MESSAGES"))
+            .or_else(|_| std::env::var("LC_ALL"))
+            .unwrap_or_default();
+        if lang.starts_with("zh") {
             Language::Zh
         } else {
             Language::En
@@ -47,6 +60,7 @@ impl Language {
     }
 
     /// Get the config string representation.
+    #[cfg(target_os = "windows")]
     pub fn to_config_str(self) -> &'static str {
         match self {
             Language::En => "en",

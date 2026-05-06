@@ -1,0 +1,32 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    libgtk-4-dev \
+    libayatana-appindicator3-dev \
+    libx11-dev \
+    libxi-dev \
+    libxtst-dev \
+    libasound2-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Use Chinese mirror for crates.io (rsproxy.cn)
+RUN mkdir -p /root/.cargo && \
+    echo '[source.crates-io]\nreplace-with = "rsproxy"\n\n[source.rsproxy]\nregistry = "https://rsproxy.cn/crates.io-index"\n\n[registries.rsproxy]\nindex = "https://rsproxy.cn/crates.io-index"\n\n[net]\ngit-fetch-with-cli = true' > /root/.cargo/config.toml
+
+WORKDIR /build
+
+# Copy source and build
+COPY qwen3-asr-typeless/ ./
+
+RUN cargo build --release 2>&1 || cargo build --release 2>&1
+
+# The binary will be at /build/target/release/qwen3-asr-typeless

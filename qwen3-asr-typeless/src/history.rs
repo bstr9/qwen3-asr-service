@@ -116,6 +116,7 @@ impl HistoryManager {
     }
 
     /// Simple case-insensitive substring search in text field.
+    #[cfg(target_os = "windows")]
     pub fn search(&self, query: &str) -> Vec<&HistoryEntry> {
         let query_lower = query.to_lowercase();
         self.entries
@@ -125,6 +126,7 @@ impl HistoryManager {
     }
 
     /// Remove entry by ID, save to disk.
+    #[cfg(target_os = "windows")]
     pub fn delete(&mut self, id: &str) -> Result<()> {
         let before = self.entries.len();
         self.entries.retain(|e| e.id != id);
@@ -153,11 +155,13 @@ impl HistoryManager {
     }
 
     /// Export history entries as pretty-printed JSON.
+    #[cfg(target_os = "windows")]
     pub fn export_json(&self) -> Result<String> {
         Ok(serde_json::to_string_pretty(&self.entries)?)
     }
 
     /// Export history entries as CSV with columns: timestamp, text, status, mode, duration.
+    #[cfg(target_os = "windows")]
     pub fn export_csv(&self) -> Result<String> {
         let mut w = String::from("timestamp,text,status,mode,duration\n");
         for e in &self.entries {
@@ -176,6 +180,7 @@ impl HistoryManager {
 
     /// Export history entries as plain text, one entry per line:
     /// `YYYY-MM-DD HH:MM:SS | text`
+    #[cfg(target_os = "windows")]
     pub fn export_txt(&self) -> Result<String> {
         let mut w = String::new();
         for e in &self.entries {

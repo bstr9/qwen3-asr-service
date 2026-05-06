@@ -1,17 +1,19 @@
-//! Floating overlay window using Windows GDI.
+//! Floating overlay window with platform-specific implementations.
 //!
 //! Displays recording status, a VU meter bar, status text, recording duration,
 //! and a processing animation in a small, always-on-top, draggable overlay window.
 //! Supports minimize mode (dot only) and position memory across sessions.
+//!
+//! - Windows: Win32 GDI with a layered popup window
+//! - Linux: GTK4 with a custom DrawingArea for cairo rendering
 
 use anyhow::Result;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::PCWSTR;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+#[cfg(target_os = "windows")]
+use std::sync::OnceLock;
+
+// ── Shared constants ──────────────────────────────────────────────────
 
 // Overlay window dimensions
 const OVERLAY_WIDTH: i32 = 320;
@@ -27,49 +29,155 @@ const BAR_HEIGHT: i32 = 8;
 // Title area height for drag detection (top portion of overlay)
 const TITLE_AREA_HEIGHT: i32 = 26;
 
-// Colors
-const COLOR_BG: u32 = 0x001E1E1E; // RGB(30, 30, 30)
-const COLOR_BAR_BG: u32 = 0x003C3C3C; // RGB(60, 60, 60)
-const COLOR_GREEN: u32 = 0x0050C800; // RGB(0, 200, 80)
-const COLOR_YELLOW: u32 = 0x0000C8FF; // RGB(255, 200, 0)
-const COLOR_RED: u32 = 0x003C3CFF; // RGB(255, 60, 60)
-const COLOR_TEXT: u32 = 0x00FFFFFF; // RGB(255, 255, 255)
-const COLOR_RECORDING_DOT: u32 = 0x0050C800; // RGB(0, 200, 80)
+// Colors (RGB)
+const COLOR_BG_R: f64 = 30.0 / 255.0;
+const COLOR_BG_G: f64 = 30.0 / 255.0;
+const COLOR_BG_B: f64 = 30.0 / 255.0;
+
+const COLOR_BAR_BG_R: f64 = 60.0 / 255.0;
+const COLOR_BAR_BG_G: f64 = 60.0 / 255.0;
+const COLOR_BAR_BG_B: f64 = 60.0 / 255.0;
+
+const COLOR_GREEN_R: f64 = 0.0 / 255.0;
+const COLOR_GREEN_G: f64 = 200.0 / 255.0;
+const COLOR_GREEN_B: f64 = 80.0 / 255.0;
+
+const COLOR_YELLOW_R: f64 = 255.0 / 255.0;
+const COLOR_YELLOW_G: f64 = 200.0 / 255.0;
+const COLOR_YELLOW_B: f64 = 0.0 / 255.0;
+
+const COLOR_RED_R: f64 = 255.0 / 255.0;
+const COLOR_RED_G: f64 = 60.0 / 255.0;
+const COLOR_RED_B: f64 = 60.0 / 255.0;
 
 // Semi-transparent alpha (0–255)
 const OVERLAY_ALPHA: u8 = 220;
 
-/// Timer ID for recording duration repaints.
-const TIMER_RECORDING: usize = 1;
-/// Timer ID for processing spinner animation.
-const TIMER_PROCESSING: usize = 2;
+/// Spinner characters for the "Processing..." animation.
+const SPINNER_CHARS: &[char] = &['|', '/', '-', '\\'];
+
 /// Timer interval for recording duration repaint (ms).
 const TIMER_RECORDING_INTERVAL: u32 = 500;
 /// Timer interval for processing spinner (ms).
 const TIMER_PROCESSING_INTERVAL: u32 = 200;
 
-/// Spinner characters for the "Processing..." animation.
-const SPINNER_CHARS: &[char] = &['|', '/', '-', '\\'];
+/// Determine VU meter color based on volume level.
+///
+/// - 0–60%: green (0, 200, 80)
+/// - 60–85%: yellow (255, 200, 0)
+/// - 85–100%: red (255, 60, 60)
+fn vu_meter_color(level: f32) -> (f64, f64, f64) {
+    if level < 0.60 {
+        (COLOR_GREEN_R, COLOR_GREEN_G, COLOR_GREEN_B)
+    } else if level < 0.85 {
+        (COLOR_YELLOW_R, COLOR_YELLOW_G, COLOR_YELLOW_B)
+    } else {
+        (COLOR_RED_R, COLOR_RED_G, COLOR_RED_B)
+    }
+}
+
+/// Build the display text based on current overlay state.
+fn build_display_text(
+    status_text: &str,
+    is_recording: bool,
+    is_processing: bool,
+    spinner_idx: i32,
+    recording_start_ms: u64,
+) -> String {
+    if is_processing {
+        let spinner_char = SPINNER_CHARS[spinner_idx as usize % SPINNER_CHARS.len()];
+        format!("{} Processing...", spinner_char)
+    } else if is_recording {
+        if recording_start_ms > 0 {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let elapsed_secs = (now_ms - recording_start_ms) / 1000;
+            let mins = elapsed_secs / 60;
+            let secs = elapsed_secs % 60;
+            if status_text.is_empty() {
+                format!("Recording {}:{:02}", mins, secs)
+            } else {
+                format!("{} {}:{:02}", status_text, mins, secs)
+            }
+        } else if status_text.is_empty() {
+            "Recording...".to_string()
+        } else {
+            status_text.to_string()
+        }
+    } else if status_text.is_empty() {
+        String::new()
+    } else {
+        status_text.to_string()
+    }
+}
+
+// ===========================================================================
+// Windows implementation
+// ===========================================================================
+
+#[cfg(target_os = "windows")]
+use std::sync::atomic::AtomicPtr;
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::*;
+#[cfg(target_os = "windows")]
+use windows::Win32::Graphics::Gdi::*;
+#[cfg(target_os = "windows")]
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
+#[cfg(target_os = "windows")]
+use windows::core::PCWSTR;
+
+// Windows-specific color constants (BGR format for Win32 GDI)
+#[cfg(target_os = "windows")]
+const COLOR_BG: u32 = 0x001E1E1E; // RGB(30, 30, 30)
+#[cfg(target_os = "windows")]
+const COLOR_BAR_BG: u32 = 0x003C3C3C; // RGB(60, 60, 60)
+#[cfg(target_os = "windows")]
+const COLOR_GREEN: u32 = 0x0050C800; // RGB(0, 200, 80)
+#[cfg(target_os = "windows")]
+const COLOR_YELLOW: u32 = 0x0000C8FF; // RGB(255, 200, 0)
+#[cfg(target_os = "windows")]
+const COLOR_RED: u32 = 0x003C3CFF; // RGB(255, 60, 60)
+#[cfg(target_os = "windows")]
+const COLOR_TEXT: u32 = 0x00FFFFFF; // RGB(255, 255, 255)
+#[cfg(target_os = "windows")]
+const COLOR_RECORDING_DOT: u32 = 0x0050C800; // RGB(0, 200, 80)
+
+/// Timer ID for recording duration repaints.
+#[cfg(target_os = "windows")]
+const TIMER_RECORDING: usize = 1;
+/// Timer ID for processing spinner animation.
+#[cfg(target_os = "windows")]
+const TIMER_PROCESSING: usize = 2;
 
 /// Class name for the overlay window.
+#[cfg(target_os = "windows")]
 const OVERLAY_CLASS_NAME: &str = "Qwen3AsrOverlay";
 
 /// Global reference to the OverlayManager, used by WndProc.
 /// We store a raw pointer (wrapped for safety) because the OverlayManager
 /// is owned by AppContext on the main thread, and the WndProc needs access.
+#[cfg(target_os = "windows")]
 static OVERLAY_MANAGER: OnceLock<OverlayManagerRef> = OnceLock::new();
 
 /// Wrapper for a raw pointer to OverlayManager. Only dereferenced on the
 /// UI thread inside the WndProc. The OverlayManager is owned by AppContext
 /// and must outlive the overlay window.
+#[cfg(target_os = "windows")]
 struct OverlayManagerRef {
     ptr: *const OverlayManager,
 }
 
+#[cfg(target_os = "windows")]
 unsafe impl Send for OverlayManagerRef {}
+#[cfg(target_os = "windows")]
 unsafe impl Sync for OverlayManagerRef {}
 
 /// Manages the floating overlay window.
+#[cfg(target_os = "windows")]
 pub struct OverlayManager {
     hwnd: AtomicPtr<core::ffi::c_void>,
     visible: AtomicBool,
@@ -94,6 +202,7 @@ pub struct OverlayManager {
     saved_y: AtomicI32,
 }
 
+#[cfg(target_os = "windows")]
 impl OverlayManager {
     /// Create an uninitialized overlay manager.
     ///
@@ -475,6 +584,7 @@ impl OverlayManager {
 }
 
 /// Window procedure for the overlay window.
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn overlay_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -560,6 +670,7 @@ unsafe extern "system" fn overlay_wnd_proc(
 }
 
 /// Handle WM_PAINT — draw the overlay content.
+#[cfg(target_os = "windows")]
 unsafe fn paint_overlay(hwnd: HWND) -> LRESULT {
     let mut ps = PAINTSTRUCT::default();
     let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
@@ -602,34 +713,9 @@ unsafe fn paint_overlay(hwnd: HWND) -> LRESULT {
     let old_font = unsafe { SelectObject(hdc, h_font) };
 
     // Build the display text
-    let display_text = if is_processing {
-        let spinner_char = SPINNER_CHARS[spinner_idx as usize % SPINNER_CHARS.len()];
-        format!("{} Processing...", spinner_char)
-    } else if is_recording {
-        // Show recording duration if we have a start time
-        if recording_start > 0 {
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            let elapsed_secs = (now_ms - recording_start) / 1000;
-            let mins = elapsed_secs / 60;
-            let secs = elapsed_secs % 60;
-            if status_text.is_empty() {
-                format!("Recording {}:{:02}", mins, secs)
-            } else {
-                format!("{} {}:{:02}", status_text, mins, secs)
-            }
-        } else if status_text.is_empty() {
-            "Recording...".to_string()
-        } else {
-            status_text.clone()
-        }
-    } else if status_text.is_empty() {
-        String::new()
-    } else {
-        status_text.clone()
-    };
+    let display_text = build_display_text(
+        &status_text, is_recording, is_processing, spinner_idx, recording_start,
+    );
 
     let text_x = if is_recording || is_processing { 28 } else { 12 };
 
@@ -690,7 +776,9 @@ unsafe fn paint_overlay(hwnd: HWND) -> LRESULT {
         // Bar fill based on volume level
         let fill_width = (volume * BAR_WIDTH as f32) as i32;
         if fill_width > 0 {
-            let fill_color = vu_meter_color(volume);
+            let (r, g, b) = vu_meter_color(volume);
+            // Convert f64 RGB back to BGR u32 for Win32
+            let fill_color = ((b * 255.0) as u32) << 16 | ((g * 255.0) as u32) << 8 | (r * 255.0) as u32;
             let fill_brush = unsafe { CreateSolidBrush(COLORREF(fill_color)) };
             let fill_rect = RECT {
                 left: BAR_X,
@@ -711,17 +799,404 @@ unsafe fn paint_overlay(hwnd: HWND) -> LRESULT {
     LRESULT(0)
 }
 
-/// Determine VU meter color based on volume level.
-///
-/// - 0–60%: green (RGB 0, 200, 80)
-/// - 60–85%: yellow (RGB 255, 200, 0)
-/// - 85–100%: red (RGB 255, 60, 60)
-fn vu_meter_color(level: f32) -> u32 {
-    if level < 0.60 {
-        COLOR_GREEN
-    } else if level < 0.85 {
-        COLOR_YELLOW
-    } else {
-        COLOR_RED
+// ===========================================================================
+// Linux implementation (GTK4)
+// ===========================================================================
+
+#[cfg(target_os = "linux")]
+use gtk4::glib;
+#[cfg(target_os = "linux")]
+use gtk4::prelude::*;
+#[cfg(target_os = "linux")]
+use std::cell::RefCell;
+
+#[cfg(target_os = "linux")]
+struct OverlayState {
+    window: Arc<RefCell<Option<gtk4::Window>>>,
+    visible: Arc<AtomicBool>,
+    volume: Arc<AtomicI32>,
+    status_text: Arc<Mutex<String>>,
+    is_recording: Arc<AtomicBool>,
+    processing: Arc<AtomicBool>,
+    spinner_index: Arc<AtomicI32>,
+    minimized: Arc<AtomicBool>,
+    recording_start_ms: Arc<AtomicU64>,
+    saved_x: Arc<AtomicI32>,
+    saved_y: Arc<AtomicI32>,
+    recording_timer_id: Arc<RefCell<Option<glib::SourceId>>>,
+    processing_timer_id: Arc<RefCell<Option<glib::SourceId>>>,
+}
+
+#[cfg(target_os = "linux")]
+pub struct OverlayManager {
+    state: OverlayState,
+}
+
+#[cfg(target_os = "linux")]
+impl OverlayManager {
+    pub fn new(
+        _overlay_position: String,
+        overlay_x: Option<i32>,
+        overlay_y: Option<i32>,
+        minimized: bool,
+    ) -> Self {
+        Self {
+            state: OverlayState {
+                window: Arc::new(RefCell::new(None)),
+                visible: Arc::new(AtomicBool::new(false)),
+                volume: Arc::new(AtomicI32::new(0.0f32.to_bits() as i32)),
+                status_text: Arc::new(Mutex::new(String::new())),
+                is_recording: Arc::new(AtomicBool::new(false)),
+                processing: Arc::new(AtomicBool::new(false)),
+                spinner_index: Arc::new(AtomicI32::new(0)),
+                minimized: Arc::new(AtomicBool::new(minimized)),
+                recording_start_ms: Arc::new(AtomicU64::new(0)),
+                saved_x: Arc::new(AtomicI32::new(overlay_x.unwrap_or(-1))),
+                saved_y: Arc::new(AtomicI32::new(overlay_y.unwrap_or(-1))),
+                recording_timer_id: Arc::new(RefCell::new(None)),
+                processing_timer_id: Arc::new(RefCell::new(None)),
+            },
+        }
+    }
+
+    fn ensure_window(&self) -> Option<gtk4::Window> {
+        if let Some(win) = self.state.window.borrow().clone() {
+            return Some(win);
+        }
+
+        let height = self.current_height();
+
+        let win = gtk4::Window::builder()
+            .decorated(false)
+            .resizable(false)
+            .opacity(OVERLAY_ALPHA as f64 / 255.0)
+            .focus_on_click(false)
+            .can_focus(false)
+            .hide_on_close(true)
+            .default_width(OVERLAY_WIDTH)
+            .default_height(height)
+            .build();
+
+        let css = gtk4::CssProvider::new();
+        css.load_from_data(
+            ".overlay-window { background-color: rgb(30,30,30); border-radius: 8px; }"
+        );
+        if let Some(display) = gtk4::gdk::Display::default() {
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &css,
+                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+        win.add_css_class("overlay-window");
+
+        let drawing_area = gtk4::DrawingArea::new();
+        drawing_area.set_draw_func({
+            let st = self.state.status_text.clone();
+            let vol = self.state.volume.clone();
+            let rec = self.state.is_recording.clone();
+            let proc = self.state.processing.clone();
+            let spin = self.state.spinner_index.clone();
+            let min = self.state.minimized.clone();
+            let start_ms = self.state.recording_start_ms.clone();
+
+            move |_area, cr, _width, _height| {
+                draw_overlay(cr, &st, &vol, &rec, &proc, &spin, &min, &start_ms);
+            }
+        });
+        drawing_area.set_hexpand(true);
+        drawing_area.set_vexpand(true);
+
+        win.set_child(Some(&drawing_area));
+
+        // Drag support: use GestureDrag to initiate Toplevel::begin_move
+        let drag = gtk4::GestureDrag::new();
+        let win_ref = self.state.window.clone();
+
+        drag.connect_drag_begin({
+            let w = win_ref.clone();
+            move |gesture, _start_x, _start_y| {
+                if let Some(win) = w.borrow().as_ref() {
+                    if let Some(surface) = win.surface() {
+                        if let Some(toplevel) = surface.downcast_ref::<gtk4::gdk::Toplevel>() {
+                            if let Some(display) = gtk4::gdk::Display::default() {
+                                if let Some(seat) = display.default_seat() {
+                                    if let Some(device) = seat.pointer() {
+                                        let event = gesture.last_event(None::<&gtk4::gdk::EventSequence>);
+                                        let timestamp = event
+                                            .as_ref()
+                                            .map(|e| e.time())
+                                            .unwrap_or(0);
+                                        toplevel.begin_move(
+                                            &device,
+                                            1,
+                                            0.0,
+                                            0.0,
+                                            timestamp,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                gesture.set_state(gtk4::EventSequenceState::Claimed);
+            }
+        });
+
+        let sx = self.state.saved_x.clone();
+        let sy = self.state.saved_y.clone();
+        win.connect_close_request({
+            let sx = sx.clone();
+            let sy = sy.clone();
+            move |win: &gtk4::Window| {
+                if let Some(surface) = win.surface() {
+                    let w = surface.width();
+                    let h = surface.height();
+                    let _ = (w, h);
+                }
+                sx.store(-1, Ordering::SeqCst);
+                sy.store(-1, Ordering::SeqCst);
+                glib::Propagation::Proceed
+            }
+        });
+
+        let dbl_click = gtk4::GestureClick::new();
+        dbl_click.set_button(gtk4::gdk::BUTTON_PRIMARY);
+        dbl_click.connect_pressed({
+            let min_clone = self.state.minimized.clone();
+            let win_clone = self.state.window.clone();
+            move |_gesture, n_press, _x, _y| {
+                if n_press == 2 {
+                    let current = min_clone.load(Ordering::SeqCst);
+                    min_clone.store(!current, Ordering::SeqCst);
+                    let h = if !current { OVERLAY_HEIGHT_MINIMIZED } else { OVERLAY_HEIGHT };
+                    if let Some(w) = win_clone.borrow().as_ref() {
+                        w.set_default_size(OVERLAY_WIDTH, h);
+                        w.queue_draw();
+                    }
+                }
+            }
+        });
+
+        drawing_area.add_controller(drag);
+        drawing_area.add_controller(dbl_click);
+
+        *self.state.window.borrow_mut() = Some(win.clone());
+        Some(win)
+    }
+
+    pub fn show(&self) -> Result<()> {
+        let win = match self.ensure_window() {
+            Some(w) => w,
+            None => anyhow::bail!("Failed to create overlay window"),
+        };
+
+        let height = self.current_height();
+        win.set_default_size(OVERLAY_WIDTH, height);
+
+        win.show();
+        self.state.visible.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    pub fn hide(&self) -> Result<()> {
+        if let Some(id) = self.state.recording_timer_id.borrow_mut().take() {
+            id.remove();
+        }
+        if let Some(id) = self.state.processing_timer_id.borrow_mut().take() {
+            id.remove();
+        }
+
+        if let Some(win) = self.state.window.borrow().as_ref() {
+            win.hide();
+        }
+
+        self.state.processing.store(false, Ordering::SeqCst);
+        self.state.recording_start_ms.store(0, Ordering::SeqCst);
+        self.state.visible.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    pub fn set_status(&self, text: &str) -> Result<()> {
+        {
+            let mut status = self.state.status_text.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
+            status.clear();
+            status.push_str(text);
+        }
+        self.invalidate()
+    }
+
+    pub fn set_volume(&self, level: f32) -> Result<()> {
+        let clamped = level.clamp(0.0, 1.0);
+        self.state.volume.store(clamped.to_bits() as i32, Ordering::SeqCst);
+        self.invalidate()
+    }
+
+    pub fn set_recording(&self, is_recording: bool) -> Result<()> {
+        self.state.is_recording.store(is_recording, Ordering::SeqCst);
+
+        if is_recording {
+            let window = self.state.window.clone();
+            let timer_id = glib::timeout_add_local(std::time::Duration::from_millis(
+                TIMER_RECORDING_INTERVAL as u64,
+            ), {
+                let win = window.clone();
+                move || {
+                    if let Some(w) = win.borrow().as_ref() {
+                        w.queue_draw();
+                    }
+                    glib::ControlFlow::Continue
+                }
+            });
+            *self.state.recording_timer_id.borrow_mut() = Some(timer_id);
+        } else {
+            if let Some(id) = self.state.recording_timer_id.borrow_mut().take() {
+                id.remove();
+            }
+            self.state.recording_start_ms.store(0, Ordering::SeqCst);
+        }
+
+        self.invalidate()
+    }
+
+    pub fn set_processing(&self, is_processing: bool) -> Result<()> {
+        self.state.processing.store(is_processing, Ordering::SeqCst);
+
+        if is_processing {
+            self.state.spinner_index.store(0, Ordering::SeqCst);
+            let spinner_index = self.state.spinner_index.clone();
+            let window = self.state.window.clone();
+            let timer_id = glib::timeout_add_local(std::time::Duration::from_millis(
+                TIMER_PROCESSING_INTERVAL as u64,
+            ), {
+                let spin = spinner_index.clone();
+                let win = window.clone();
+                move || {
+                    let idx = spin.fetch_add(1, Ordering::SeqCst);
+                    spin.store(idx % SPINNER_CHARS.len() as i32, Ordering::SeqCst);
+                    if let Some(w) = win.borrow().as_ref() {
+                        w.queue_draw();
+                    }
+                    glib::ControlFlow::Continue
+                }
+            });
+            *self.state.processing_timer_id.borrow_mut() = Some(timer_id);
+        } else {
+            if let Some(id) = self.state.processing_timer_id.borrow_mut().take() {
+                id.remove();
+            }
+        }
+
+        self.invalidate()
+    }
+
+    pub fn set_recording_start(&self, timestamp_ms: u64) -> Result<()> {
+        self.state.recording_start_ms.store(timestamp_ms, Ordering::SeqCst);
+        Ok(())
+    }
+
+    pub fn save_position(&self) -> (i32, i32) {
+        (self.state.saved_x.load(Ordering::SeqCst), self.state.saved_y.load(Ordering::SeqCst))
+    }
+
+    pub fn destroy(&self) -> Result<()> {
+        if let Some(id) = self.state.recording_timer_id.borrow_mut().take() {
+            id.remove();
+        }
+        if let Some(id) = self.state.processing_timer_id.borrow_mut().take() {
+            id.remove();
+        }
+
+        if let Some(win) = self.state.window.borrow_mut().take() {
+            win.close();
+        }
+        self.state.visible.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn invalidate(&self) -> Result<()> {
+        if let Some(win) = self.state.window.borrow().as_ref() {
+            win.queue_draw();
+        }
+        Ok(())
+    }
+
+    fn current_height(&self) -> i32 {
+        if self.state.minimized.load(Ordering::SeqCst) {
+            OVERLAY_HEIGHT_MINIMIZED
+        } else {
+            OVERLAY_HEIGHT
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn draw_overlay(
+    cr: &gtk4::cairo::Context,
+    status_text: &Arc<Mutex<String>>,
+    volume: &Arc<AtomicI32>,
+    is_recording: &Arc<AtomicBool>,
+    processing: &Arc<AtomicBool>,
+    spinner_index: &Arc<AtomicI32>,
+    minimized: &Arc<AtomicBool>,
+    recording_start_ms: &Arc<AtomicU64>,
+) {
+    let text = status_text.lock().map(|g| g.clone()).unwrap_or_default();
+    let rec = is_recording.load(Ordering::SeqCst);
+    let vol = f32::from_bits(volume.load(Ordering::SeqCst) as u32);
+    let proc = processing.load(Ordering::SeqCst);
+    let spin = spinner_index.load(Ordering::SeqCst);
+    let min = minimized.load(Ordering::SeqCst);
+    let start_ms = recording_start_ms.load(Ordering::SeqCst);
+
+    let height = if min { OVERLAY_HEIGHT_MINIMIZED } else { OVERLAY_HEIGHT };
+
+    cr.set_source_rgb(COLOR_BG_R, COLOR_BG_G, COLOR_BG_B);
+    cr.rectangle(0.0, 0.0, OVERLAY_WIDTH as f64, height as f64);
+    let _ = cr.fill();
+
+    let display_text = build_display_text(&text, rec, proc, spin, start_ms);
+    let text_x = if rec || proc { 28.0 } else { 12.0 };
+
+    if rec || proc {
+        let (dot_r, dot_g, dot_b) = if proc {
+            (COLOR_YELLOW_R, COLOR_YELLOW_G, COLOR_YELLOW_B)
+        } else {
+            (COLOR_GREEN_R, COLOR_GREEN_G, COLOR_GREEN_B)
+        };
+        cr.set_source_rgb(dot_r, dot_g, dot_b);
+        let dot_cy = if min { 15.0 } else { 16.0 };
+        cr.arc(16.0, dot_cy, 6.0, 0.0, 2.0 * std::f64::consts::PI);
+        let _ = cr.fill();
+    }
+
+    if !display_text.is_empty() {
+        cr.set_source_rgb(1.0, 1.0, 1.0);
+        let font_size = 13.0;
+        cr.set_font_size(font_size);
+        cr.select_font_face(
+            "sans-serif",
+            gtk4::cairo::FontSlant::Normal,
+            gtk4::cairo::FontWeight::Normal,
+        );
+        let title_h = if min { OVERLAY_HEIGHT_MINIMIZED as f64 } else { TITLE_AREA_HEIGHT as f64 };
+        let text_y = title_h / 2.0 + font_size / 2.0 - 2.0;
+        let _ = cr.move_to(text_x, text_y);
+        let _ = cr.show_text(&display_text);
+    }
+
+    if rec && !min {
+        cr.set_source_rgb(COLOR_BAR_BG_R, COLOR_BAR_BG_G, COLOR_BAR_BG_B);
+        cr.rectangle(BAR_X as f64, BAR_Y as f64, BAR_WIDTH as f64, BAR_HEIGHT as f64);
+        let _ = cr.fill();
+
+        let fill_width = (vol * BAR_WIDTH as f32) as f64;
+        if fill_width > 0.0 {
+            let (fr, fg, fb) = vu_meter_color(vol);
+            cr.set_source_rgb(fr, fg, fb);
+            cr.rectangle(BAR_X as f64, BAR_Y as f64, fill_width, BAR_HEIGHT as f64);
+            let _ = cr.fill();
+        }
     }
 }

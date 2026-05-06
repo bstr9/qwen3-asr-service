@@ -7,7 +7,9 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+#[cfg(target_os = "windows")]
 use windows::core::PCWSTR;
+#[cfg(target_os = "windows")]
 use windows::Win32::System::Registry::*;
 
 /// Top-level application configuration.
@@ -279,11 +281,12 @@ impl AppConfig {
     }
 }
 
-/// Set or remove Windows auto-start registry entry.
+/// Set or remove auto-start entry.
 ///
-/// When `enable` is true, writes the current exe path to
+/// On Windows, writes/removes the current exe path to
 /// `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
-/// When false, removes the entry.
+/// On Linux, creates/removes a .desktop file in the XDG autostart directory.
+#[cfg(target_os = "windows")]
 pub fn set_auto_start(enable: bool) -> Result<()> {
     let key_path: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
         .encode_utf16()
@@ -358,6 +361,32 @@ pub fn set_auto_start(enable: bool) -> Result<()> {
                 log::info!("Auto-start removed from registry");
             }
             unsafe { let _ = RegCloseKey(hkey); }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn set_auto_start(enable: bool) -> Result<()> {
+    let autostart_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+        .join("autostart");
+    let desktop_path = autostart_dir.join("qwen3-asr-typeless.desktop");
+
+    if enable {
+        std::fs::create_dir_all(&autostart_dir)?;
+        let exe_path = std::env::current_exe()?;
+        let exe_str = exe_path.to_str().unwrap_or("");
+        let desktop_entry = format!(
+            "[Desktop Entry]\nType=Application\nName=Qwen3-ASR Typeless\nExec={}\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n",
+            exe_str
+        );
+        std::fs::write(&desktop_path, desktop_entry)?;
+        log::info!("Auto-start enabled via .desktop file at {:?}", desktop_path);
+    } else {
+        if desktop_path.exists() {
+            std::fs::remove_file(&desktop_path)?;
+            log::info!("Auto-start removed (deleted .desktop file)");
         }
     }
     Ok(())

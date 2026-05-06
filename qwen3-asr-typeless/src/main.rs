@@ -1,9 +1,11 @@
 //! Application entry point.
 //!
-//! Runs a Win32 message loop on the main thread (required for tray icon,
-//! overlay window, and hotkey hook). A tokio runtime handles async work
-//! (ASR requests). All cross-thread communication uses `PostMessageW`
-//! with custom `WM_APP+n` messages to avoid blocking the UI thread.
+//! Runs a platform-specific main loop on the main thread:
+//! - Windows: Win32 message loop (required for tray icon, overlay window, hotkey hook).
+//!   Cross-thread communication uses `PostMessageW` with custom `WM_APP+n` messages.
+//! - Linux: GTK main loop. Cross-thread communication uses `tokio::sync::mpsc` channel.
+//!
+//! A tokio runtime handles async work (ASR requests) on both platforms.
 
 mod app;
 mod asr_client;
@@ -35,47 +37,82 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tray::{TrayAction, TrayManager, TrayState};
 
+// ── Platform-specific imports ──────────────────────────────────────────
+
+#[cfg(target_os = "windows")]
 use windows::Win32::Foundation::*;
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-// ── Custom Windows messages ────────────────────────────────────────────
+#[cfg(target_os = "linux")]
+use tokio::sync::mpsc;
 
-/// WM_APP base — all our custom messages start here.
+#[cfg(target_os = "linux")]
+use gtk4::gio::prelude::*;
+
+#[cfg(target_os = "linux")]
+use gtk4::prelude::*;
+
+#[cfg(target_os = "linux")]
+use std::sync::Mutex;
+
+#[cfg(target_os = "linux")]
+static mut GTK_CTX_PTR: *mut AppContext = std::ptr::null_mut();
+
+// ── Unified application message enum ──────────────────────────────────
+
+/// Cross-thread message type. On Windows, these are sent via PostMessageW
+/// with WM_APP+n message IDs. On Linux, these are sent via mpsc channel.
+enum AppMessage {
+    AsrResult(String),
+    AsrError(String),
+    SilenceTimeout,
+    VadSilenceStart,
+    VadSilenceEnd,
+    HotkeyEvent(HotkeyEvent),
+    PasteComplete,
+    TrayToggleMode,
+    TrayShowSettings,
+    TrayShowHistory,
+    TrayShowMainWindow,
+    TrayQuit,
+    MaxDurationTimer,
+}
+
+// ── Windows-only constants and types ──────────────────────────────────
+
+#[cfg(target_os = "windows")]
 const WM_APP_BASE: u32 = 0x8000;
 
-/// Posted when an ASR result is available. wparam = *mut ThreadString.
+#[cfg(target_os = "windows")]
 const WM_ASR_RESULT: u32 = WM_APP_BASE + 100;
-/// Posted when an ASR error occurs. wparam = *mut ThreadString.
+#[cfg(target_os = "windows")]
 const WM_ASR_ERROR: u32 = WM_APP_BASE + 101;
-/// Posted when silence timeout fires (hands-free mode).
+#[cfg(target_os = "windows")]
 const WM_SILENCE_TIMEOUT: u32 = WM_APP_BASE + 103;
-/// Posted when VAD silence starts (hands-free mode).
+#[cfg(target_os = "windows")]
 const WM_VAD_SILENCE_START: u32 = WM_APP_BASE + 104;
-/// Posted when VAD silence ends (hands-free mode).
+#[cfg(target_os = "windows")]
 const WM_VAD_SILENCE_END: u32 = WM_APP_BASE + 105;
-/// Posted when a hotkey event fires. wparam = HotkeyEvent encoded as usize.
+#[cfg(target_os = "windows")]
 const WM_HOTKEY_EVENT: u32 = WM_APP_BASE + 106;
-/// Posted after paste completes.
+#[cfg(target_os = "windows")]
 const WM_PASTE_COMPLETE: u32 = WM_APP_BASE + 107;
-/// Posted from tray ToggleMode action.
+#[cfg(target_os = "windows")]
 const WM_TRAY_TOGGLE_MODE: u32 = WM_APP_BASE + 108;
-/// Posted from tray ShowSettings action.
+#[cfg(target_os = "windows")]
 const WM_TRAY_SHOW_SETTINGS: u32 = WM_APP_BASE + 109;
-/// Posted from tray ShowHistory action.
+#[cfg(target_os = "windows")]
 const WM_TRAY_SHOW_HISTORY: u32 = WM_APP_BASE + 110;
-/// Posted from tray ShowMainWindow action.
+#[cfg(target_os = "windows")]
 const WM_TRAY_SHOW_MAINWINDOW: u32 = WM_APP_BASE + 111;
 
-/// Windows timer ID for max recording duration check.
+#[cfg(target_os = "windows")]
 const TIMER_MAX_DURATION: usize = 1;
-/// Check interval for max duration timer (milliseconds).
 const MAX_DURATION_CHECK_INTERVAL_MS: u32 = 500;
-/// Minimum recording duration in seconds. Recordings shorter than this are discarded.
 const MIN_RECORDING_DURATION_SECS: f64 = 1.0;
 
-// ── Hotkey event encoding for WPARAM ──────────────────────────────────
-
-/// Encode a HotkeyEvent as a usize for WPARAM.
+#[cfg(target_os = "windows")]
 fn encode_hotkey_event(event: HotkeyEvent) -> usize {
     match event {
         HotkeyEvent::KeyDown(HotkeyKind::Ptt) => 0x00,
@@ -87,7 +124,7 @@ fn encode_hotkey_event(event: HotkeyEvent) -> usize {
     }
 }
 
-/// Decode a HotkeyEvent from WPARAM.
+#[cfg(target_os = "windows")]
 fn decode_hotkey_event(val: usize) -> Option<HotkeyEvent> {
     match val {
         0x00 => Some(HotkeyEvent::KeyDown(HotkeyKind::Ptt)),
@@ -100,21 +137,17 @@ fn decode_hotkey_event(val: usize) -> Option<HotkeyEvent> {
     }
 }
 
-// ── Shared strings passed across threads via PostMessage ──────────────
-
-/// A heap-allocated string that can be safely sent to the UI thread
-/// via PostMessage. The receiver takes ownership via Box::from_raw.
-///
-/// **Important**: If `PostMessageW` fails (returns `FALSE`), the pointer
-/// is never received and must be reclaimed to avoid a memory leak.
-/// Use [`ThreadString::post_or_reclaim`] to handle this safely.
+#[cfg(target_os = "windows")]
 struct ThreadString {
     inner: String,
 }
 
+#[cfg(target_os = "windows")]
 unsafe impl Send for ThreadString {}
+#[cfg(target_os = "windows")]
 unsafe impl Sync for ThreadString {}
 
+#[cfg(target_os = "windows")]
 impl ThreadString {
     fn new(s: String) -> Box<Self> {
         Box::new(ThreadString { inner: s })
@@ -128,32 +161,26 @@ impl ThreadString {
         Box::from_raw(ptr)
     }
 
-    /// Post a pointer to this `ThreadString` via `PostMessageW`.
-    ///
-    /// If `PostMessageW` succeeds, ownership transfers to the receiving thread.
-    /// If it fails, the `Box` is reconstructed and dropped to prevent a memory leak.
     unsafe fn post_or_reclaim(b: Box<Self>, hwnd: HWND, msg: u32) {
         let ptr = Box::into_raw(b);
         if PostMessageW(hwnd, msg, WPARAM(ptr as usize), LPARAM(0)).is_ok() {
             // Ownership transferred — receiver will call from_raw
         } else {
-            // PostMessageW failed — reclaim to avoid leak
             log::warn!("PostMessageW({}) failed, reclaiming ThreadString to prevent leak", msg);
             drop(Box::from_raw(ptr));
         }
     }
 }
 
-// ── Send-safe wrapper for HWND ─────────────────────────────────────────
-
-/// HWND is `*mut c_void` which is not Send/Sync. We wrap the raw pointer
-/// value as `isize` so it can be captured in closures that need to be
-/// `Send + Sync` (e.g. tray/hotkey callbacks that post messages).
+#[cfg(target_os = "windows")]
 struct SendHwnd(isize);
 
+#[cfg(target_os = "windows")]
 unsafe impl Send for SendHwnd {}
+#[cfg(target_os = "windows")]
 unsafe impl Sync for SendHwnd {}
 
+#[cfg(target_os = "windows")]
 impl SendHwnd {
     fn from_hwnd(hwnd: HWND) -> Self {
         Self(hwnd.0 as isize)
@@ -164,13 +191,35 @@ impl SendHwnd {
     }
 }
 
-/// Send-safe wrapper for a raw pointer to OverlayManager.
-/// The OverlayManager uses only atomics internally, so set_volume is thread-safe.
+#[cfg(target_os = "windows")]
 struct SendOverlay(*const overlay::OverlayManager);
 
+#[cfg(target_os = "windows")]
 unsafe impl Send for SendOverlay {}
+#[cfg(target_os = "windows")]
 unsafe impl Sync for SendOverlay {}
 
+#[cfg(target_os = "windows")]
+impl SendOverlay {
+    fn from_overlay(overlay: &overlay::OverlayManager) -> Self {
+        Self(overlay as *const overlay::OverlayManager)
+    }
+
+    fn set_volume(&self, level: f32) {
+        let mgr = unsafe { &*self.0 };
+        let _ = mgr.set_volume(level);
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct SendOverlay(*const overlay::OverlayManager);
+
+#[cfg(target_os = "linux")]
+unsafe impl Send for SendOverlay {}
+#[cfg(target_os = "linux")]
+unsafe impl Sync for SendOverlay {}
+
+#[cfg(target_os = "linux")]
 impl SendOverlay {
     fn from_overlay(overlay: &overlay::OverlayManager) -> Self {
         Self(overlay as *const overlay::OverlayManager)
@@ -189,8 +238,6 @@ struct AppContext {
     state: AppState,
     mode: RecordingMode,
     recorder: Option<audio::AudioRecorder>,
-    /// The receiver for audio chunks. Stored separately because
-    /// we need to drain it after stopping the recorder.
     audio_rx: Option<tokio::sync::mpsc::UnboundedReceiver<audio::AudioChunk>>,
     recorded_samples: Vec<f32>,
     recording_start: Option<Instant>,
@@ -199,17 +246,22 @@ struct AppContext {
     overlay: OverlayManager,
     hotkey: HotkeyManager,
     asr_handle: Option<tokio::task::JoinHandle<()>>,
-    /// VAD monitor thread handle (hands-free mode only).
     vad_thread: Option<std::thread::JoinHandle<()>>,
-    /// The tray HWND — used for PostMessageW from background threads.
-    msg_hwnd: HWND,
-    /// Internationalization / translation dictionary.
     i18n: I18n,
-    /// Path to the config file (for saving settings and passing to dialogs).
     config_path: std::path::PathBuf,
+
+    #[cfg(target_os = "windows")]
+    msg_hwnd: HWND,
+    #[cfg(target_os = "linux")]
+    tx: mpsc::UnboundedSender<AppMessage>,
+    #[cfg(target_os = "linux")]
+    max_duration_timer_id: Option<gtk4::glib::SourceId>,
+    #[cfg(target_os = "linux")]
+    prev_window_id: Option<String>,
 }
 
 impl AppContext {
+    #[cfg(target_os = "windows")]
     fn new(config: AppConfig, msg_hwnd: HWND, config_path: std::path::PathBuf) -> Self {
         let mode = match config.mode.default.as_str() {
             "handsfree" => RecordingMode::HandsFree,
@@ -225,9 +277,6 @@ impl AppContext {
         let history = HistoryManager::new(&config_dir)
             .unwrap_or_else(|e| {
                 log::warn!("Failed to init history: {}", e);
-                // Fallback to a temp directory — HistoryManager::new with a writable
-                // dir should always succeed, but if even that fails, use an in-memory
-                // instance that writes to a temp location.
                 let fallback_dir = std::env::temp_dir().join("qwen3-asr-typeless");
                 HistoryManager::new(&fallback_dir).unwrap_or_else(|e2| {
                     log::error!("Failed to init history in fallback dir: {}. History will not persist.", e2);
@@ -266,12 +315,78 @@ impl AppContext {
             config_path,
         }
     }
+
+    #[cfg(target_os = "linux")]
+    fn new(config: AppConfig, tx: mpsc::UnboundedSender<AppMessage>, config_path: std::path::PathBuf) -> Self {
+        let mode = match config.mode.default.as_str() {
+            "handsfree" => RecordingMode::HandsFree,
+            _ => RecordingMode::PushToTalk,
+        };
+
+        let overlay_position = config.ui.overlay_position.clone();
+        let overlay_x = config.ui.overlay_x;
+        let overlay_y = config.ui.overlay_y;
+        let overlay_minimized = config.ui.overlay_minimized;
+
+        let config_dir = AppConfig::config_dir();
+        let history = HistoryManager::new(&config_dir)
+            .unwrap_or_else(|e| {
+                log::warn!("Failed to init history: {}", e);
+                let fallback_dir = std::env::temp_dir().join("qwen3-asr-typeless");
+                HistoryManager::new(&fallback_dir).unwrap_or_else(|e2| {
+                    log::error!("Failed to init history in fallback dir: {}. History will not persist.", e2);
+                    HistoryManager::new_in_memory()
+                })
+            });
+
+        let dictionary = DictionaryManager::new(&config_dir)
+            .unwrap_or_else(|e| {
+                log::warn!("Failed to init dictionary: {}", e);
+                let fallback_dir = std::env::temp_dir().join("qwen3-asr-typeless");
+                DictionaryManager::new(&fallback_dir).unwrap_or_else(|e2| {
+                    log::error!("Failed to init dictionary in fallback dir: {}. Dictionary will not persist.", e2);
+                    DictionaryManager::new_in_memory()
+                })
+            });
+
+        let i18n = I18n::from_config(&config.ui.language);
+
+        Self {
+            config,
+            state: AppState::Idle,
+            mode,
+            recorder: None,
+            audio_rx: None,
+            recorded_samples: Vec::new(),
+            recording_start: None,
+            history,
+            dictionary,
+            overlay: OverlayManager::new(overlay_position, overlay_x, overlay_y, overlay_minimized),
+            hotkey: HotkeyManager::new(),
+            asr_handle: None,
+            vad_thread: None,
+            tx,
+            max_duration_timer_id: None,
+            prev_window_id: None,
+            i18n,
+            config_path,
+        }
+    }
+}
+
+// ── Platform-specific message sending helpers ─────────────────────────
+
+#[cfg(target_os = "linux")]
+fn send_app_message(tx: &mpsc::UnboundedSender<AppMessage>, msg: AppMessage) {
+    if tx.send(msg).is_err() {
+        log::warn!("Failed to send AppMessage: channel closed");
+    }
 }
 
 // ── Main entry point ──────────────────────────────────────────────────
 
+#[cfg(target_os = "windows")]
 fn main() -> anyhow::Result<()> {
-    // Initialize logger
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format(|buf, record| {
             writeln!(
@@ -284,7 +399,6 @@ fn main() -> anyhow::Result<()> {
         })
         .init();
 
-    // Load config
     let config_path = AppConfig::default_config_path();
     let config = AppConfig::load(&config_path).unwrap_or_else(|e| {
         log::warn!("Failed to load config: {}, using defaults", e);
@@ -295,25 +409,20 @@ fn main() -> anyhow::Result<()> {
     log::info!("ASR URL: {}", config.asr_url);
     log::info!("Mode: {}", config.mode.default);
 
-    // Sync auto-start registry state with config
     if config.ui.start_with_system {
         if let Err(e) = config::set_auto_start(true) {
             log::warn!("Failed to set auto-start: {}", e);
         }
     }
 
-    // Create the tokio runtime manually (NOT #[tokio::main])
-    // We use Arc<Runtime> so that cleanup can consume it.
     let rt = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?
     );
 
-    // Create tray window on the main thread (required by Win32)
     let msg_hwnd = tray::create_tray_window()?;
 
-    // Set up tray icon — capture HWND as SendHwnd for the callback closure
     let send_hwnd = SendHwnd::from_hwnd(msg_hwnd);
     let mut tray_mgr = TrayManager::new(msg_hwnd)?;
     tray_mgr.set_callback(Box::new(move |action: TrayAction| {
@@ -353,7 +462,6 @@ fn main() -> anyhow::Result<()> {
     tray_mgr.show()?;
     tray::set_global_tray(Box::new(tray_mgr));
 
-    // Create overlay window — pass saved position and minimized state from config
     let overlay = OverlayManager::new(
         config.ui.overlay_position.clone(),
         config.ui.overlay_x,
@@ -362,11 +470,9 @@ fn main() -> anyhow::Result<()> {
     );
     overlay.create(Some(msg_hwnd))?;
 
-    // Initialize app context
     let mut ctx = AppContext::new(config, msg_hwnd, config_path.clone());
     ctx.overlay = overlay;
 
-    // Cleanup expired history entries on startup
     match ctx.history.cleanup_expired(ctx.config.ui.history_retention_days) {
         Ok(count) => {
             if count > 0 {
@@ -378,8 +484,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Start hotkey hook — posts WM_HOTKEY_EVENT to msg_hwnd
-    let send_hwnd2 = SendHwnd::from_hwnd(msg_hwnd);
+    let send_hwnd2 = SendHwnd::from_hwnd(ctx.msg_hwnd);
     ctx.hotkey.start(
         &ctx.config.hotkey.ptt_key,
         &ctx.config.hotkey.handsfree_key,
@@ -395,10 +500,9 @@ fn main() -> anyhow::Result<()> {
 
     log::info!("Hotkey hook installed. Press F8 (PTT) or RightAlt+Space (Hands-free).");
 
-    // Startup health check: verify ASR service is reachable
     {
         let asr_url = ctx.config.asr_url.clone();
-        let send_hwnd3 = SendHwnd::from_hwnd(msg_hwnd);
+        let send_hwnd3 = SendHwnd::from_hwnd(ctx.msg_hwnd);
         std::thread::Builder::new()
             .name("health-check".into())
             .spawn(move || {
@@ -421,7 +525,6 @@ fn main() -> anyhow::Result<()> {
                     }
                     Err(e) => {
                         log::warn!("ASR service unreachable: {}", e);
-                        // Set disconnected state and notify
                         tray::set_global_state(TrayState::Disconnected);
                         let hwnd = send_hwnd3.to_hwnd();
                         unsafe {
@@ -433,12 +536,9 @@ fn main() -> anyhow::Result<()> {
             })?;
     }
 
-    // ── Standard Win32 message loop ────────────────────────────────────
-
     let mut msg = MSG::default();
 
     loop {
-        // GetMessageW blocks until a message arrives — no CPU spinning.
         let got = unsafe { GetMessageW(&mut msg, None, 0, 0) };
         if !got.as_bool() || msg.message == WM_QUIT {
             log::info!("WM_QUIT received, exiting...");
@@ -446,18 +546,13 @@ fn main() -> anyhow::Result<()> {
             return Ok(());
         }
 
-        // Dispatch custom messages to our handler
         if msg.message >= WM_APP_BASE && msg.message <= WM_APP_BASE + 200 {
             handle_custom_message(&mut ctx, msg.message, msg.wParam, msg.lParam, &rt);
         } else if msg.message == WM_TIMER {
-            // Handle max recording duration timer (TIMER_MAX_DURATION on msg_hwnd)
-            // Overlay timers (TIMER_RECORDING, TIMER_PROCESSING) are handled by
-            // the overlay WndProc via DispatchMessageW.
             let timer_id = msg.wParam.0;
             if timer_id == TIMER_MAX_DURATION {
                 handle_timer(&mut ctx, msg.wParam, &rt);
             } else {
-                // Dispatch overlay timer messages to the overlay WndProc
                 let _ = unsafe { TranslateMessage(&msg) };
                 unsafe { DispatchMessageW(&msg); }
             }
@@ -468,8 +563,250 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-// ── Custom message dispatch ───────────────────────────────────────────
+#[cfg(target_os = "linux")]
+fn main() -> anyhow::Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "[{} {}] {}",
+                buf.timestamp(),
+                record.level(),
+                record.args()
+            )
+        })
+        .init();
 
+    let config_path = AppConfig::default_config_path();
+    let config = AppConfig::load(&config_path).unwrap_or_else(|e| {
+        log::warn!("Failed to load config: {}, using defaults", e);
+        AppConfig::default()
+    });
+
+    log::info!("Qwen3-ASR Typeless starting...");
+    log::info!("ASR URL: {}", config.asr_url);
+    log::info!("Mode: {}", config.mode.default);
+
+    if config.ui.start_with_system {
+        if let Err(e) = config::set_auto_start(true) {
+            log::warn!("Failed to set auto-start: {}", e);
+        }
+    }
+
+    let rt = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+    );
+
+    gtk4::init()?;
+
+    let (tx, rx) = mpsc::unbounded_channel::<AppMessage>();
+
+    let tx_tray = tx.clone();
+    let mut tray_mgr = TrayManager::new()?;
+    tray_mgr.set_callback(Box::new(move |action: TrayAction| {
+        let msg = match action {
+            TrayAction::ToggleMode => AppMessage::TrayToggleMode,
+            TrayAction::ShowMainWindow => AppMessage::TrayShowMainWindow,
+            TrayAction::ShowHistory => AppMessage::TrayShowHistory,
+            TrayAction::ShowSettings => AppMessage::TrayShowSettings,
+            TrayAction::About => AppMessage::TrayShowMainWindow,
+            TrayAction::Quit => AppMessage::TrayQuit,
+        };
+        send_app_message(&tx_tray, msg);
+    }));
+    tray_mgr.update_mode_display(matches!(config.mode.default.as_str(), "handsfree"))?;
+    tray_mgr.show()?;
+    tray::set_global_tray(Box::new(tray_mgr));
+
+    let overlay = OverlayManager::new(
+        config.ui.overlay_position.clone(),
+        config.ui.overlay_x,
+        config.ui.overlay_y,
+        config.ui.overlay_minimized,
+    );
+
+    let mut ctx = AppContext::new(config, tx.clone(), config_path.clone());
+    ctx.overlay = overlay;
+
+    match ctx.history.cleanup_expired(ctx.config.ui.history_retention_days) {
+        Ok(count) => {
+            if count > 0 {
+                log::info!("Cleaned up {} expired history entries", count);
+            }
+        }
+        Err(e) => {
+            log::warn!("Failed to cleanup expired history: {}", e);
+        }
+    }
+
+    let tx_hotkey = tx.clone();
+    ctx.hotkey.start(
+        &ctx.config.hotkey.ptt_key,
+        &ctx.config.hotkey.handsfree_key,
+        &ctx.config.hotkey.cancel_key,
+        Box::new(move |event: HotkeyEvent| {
+            send_app_message(&tx_hotkey, AppMessage::HotkeyEvent(event));
+        }),
+    )?;
+
+    log::info!("Hotkey hook installed. Press F8 (PTT) or RightAlt+Space (Hands-free).");
+
+    {
+        let asr_url = ctx.config.asr_url.clone();
+        let tx_health = tx.clone();
+        std::thread::Builder::new()
+            .name("health-check".into())
+            .spawn(move || {
+                let client = reqwest::blocking::Client::builder()
+                    .timeout(std::time::Duration::from_secs(3))
+                    .build()
+                    .unwrap_or_else(|_| reqwest::blocking::Client::new());
+                let url = format!("{}/v1/health", asr_url);
+                match client.get(&url).send() {
+                    Ok(resp) if resp.status().is_success() => {
+                        log::info!("ASR service health check passed");
+                    }
+                    Ok(resp) => {
+                        log::warn!("ASR service health check returned status {}", resp.status());
+                        send_app_message(&tx_health, AppMessage::AsrError(
+                            format!("Service returned status {}", resp.status())
+                        ));
+                    }
+                    Err(e) => {
+                        log::warn!("ASR service unreachable: {}", e);
+                        tray::set_global_state(TrayState::Disconnected);
+                        send_app_message(&tx_health, AppMessage::AsrError(
+                            format!("ASR service unreachable: {}", e)
+                        ));
+                    }
+                }
+            })?;
+    }
+
+    let ctx_ptr: *mut AppContext = Box::into_raw(Box::new(ctx));
+    unsafe { GTK_CTX_PTR = ctx_ptr; }
+
+    let rt_ref = rt.clone();
+    let rx_ptr = Arc::new(Mutex::new(Some(rx)));
+
+    // Use gtk4::Application for the main loop (gtk4::main() doesn't exist in 0.9)
+    let app = gtk4::Application::builder()
+        .application_id("com.qwen3.asr-typeless")
+        .build();
+
+    let app_ref = app.clone();
+    gtk4::glib::idle_add_local(move || {
+        let mut rx_guard = rx_ptr.lock().unwrap();
+        if let Some(rx) = rx_guard.as_mut() {
+            while let Ok(msg) = rx.try_recv() {
+                let ctx = unsafe { &mut *GTK_CTX_PTR };
+                handle_app_message(ctx, msg, &rt_ref, &app_ref);
+            }
+        }
+        gtk4::glib::ControlFlow::Continue
+    });
+
+    app.connect_activate(|app| {
+        let win = gtk4::Window::new();
+        win.set_application(Some(app));
+    });
+
+    let _ = app.run();
+
+    let mut ctx = unsafe { Box::from_raw(ctx_ptr) };
+    cleanup(&mut ctx, rt);
+
+    Ok(())
+}
+
+// ── Unified message dispatch ──────────────────────────────────────────
+
+#[cfg(target_os = "linux")]
+fn handle_app_message(
+    ctx: &mut AppContext,
+    msg: AppMessage,
+    rt: &Arc<tokio::runtime::Runtime>,
+    app: &gtk4::Application,
+) {
+    match msg {
+        AppMessage::HotkeyEvent(hotkey_event) => {
+            let app_event = match hotkey_event {
+                HotkeyEvent::KeyDown(HotkeyKind::Ptt) => AppEvent::HotKeyDown,
+                HotkeyEvent::KeyUp(HotkeyKind::Ptt) => AppEvent::HotKeyUp,
+                HotkeyEvent::KeyDown(HotkeyKind::HandsFree) => AppEvent::HotKeyDown,
+                HotkeyEvent::KeyUp(HotkeyKind::HandsFree) => AppEvent::HotKeyUp,
+                HotkeyEvent::KeyDown(HotkeyKind::Cancel) => AppEvent::CancelEsc,
+                HotkeyEvent::KeyUp(HotkeyKind::Cancel) => return,
+            };
+            dispatch_event(ctx, app_event, rt);
+        }
+
+        AppMessage::AsrResult(text) => {
+            dispatch_event(ctx, AppEvent::AsrResult(text), rt);
+        }
+
+        AppMessage::AsrError(error_msg) => {
+            dispatch_event(ctx, AppEvent::AsrError(error_msg), rt);
+        }
+
+        AppMessage::SilenceTimeout => {
+            dispatch_event(ctx, AppEvent::SilenceTimeout, rt);
+        }
+
+        AppMessage::VadSilenceStart => {
+            dispatch_event(ctx, AppEvent::VadSilenceStart, rt);
+        }
+
+        AppMessage::VadSilenceEnd => {
+            dispatch_event(ctx, AppEvent::VadSilenceEnd, rt);
+        }
+
+        AppMessage::PasteComplete => {
+            dispatch_event(ctx, AppEvent::PasteComplete, rt);
+        }
+
+        AppMessage::TrayToggleMode => {
+            ctx.mode = match ctx.mode {
+                RecordingMode::PushToTalk => RecordingMode::HandsFree,
+                RecordingMode::HandsFree => RecordingMode::PushToTalk,
+            };
+            let is_hf = ctx.mode == RecordingMode::HandsFree;
+            log::info!("Mode switched to {}", if is_hf { "Hands-free" } else { "Push-to-Talk" });
+            tray::update_global_mode_display(is_hf);
+        }
+
+        AppMessage::TrayShowSettings => {
+            let config_path = ctx.config_path.clone();
+            settings::show_settings_dialog_gtk(&mut ctx.config, &config_path, &ctx.dictionary, &ctx.i18n);
+        }
+
+        AppMessage::TrayShowHistory => {
+            log::info!("History window not yet implemented on Linux");
+        }
+
+        AppMessage::TrayShowMainWindow => {
+            if !main_window::is_main_window_open() {
+                main_window::show_main_window(&mut ctx.config, &ctx.config_path, &mut ctx.dictionary, &ctx.history, &ctx.i18n);
+            } else {
+                main_window::show_main_window(&mut ctx.config, &ctx.config_path, &mut ctx.dictionary, &ctx.history, &ctx.i18n);
+            }
+        }
+
+        AppMessage::TrayQuit => {
+            app.quit();
+        }
+
+        AppMessage::MaxDurationTimer => {
+            handle_max_duration_timer(ctx, rt);
+        }
+    }
+}
+
+// ── Windows custom message dispatch ───────────────────────────────────
+
+#[cfg(target_os = "windows")]
 fn handle_custom_message(
     ctx: &mut AppContext,
     msg: u32,
@@ -486,7 +823,7 @@ fn handle_custom_message(
                     HotkeyEvent::KeyDown(HotkeyKind::HandsFree) => AppEvent::HotKeyDown,
                     HotkeyEvent::KeyUp(HotkeyKind::HandsFree) => AppEvent::HotKeyUp,
                     HotkeyEvent::KeyDown(HotkeyKind::Cancel) => AppEvent::CancelEsc,
-                    HotkeyEvent::KeyUp(HotkeyKind::Cancel) => return, // ignore
+                    HotkeyEvent::KeyUp(HotkeyKind::Cancel) => return,
                 };
                 dispatch_event(ctx, app_event, rt);
             }
@@ -553,7 +890,6 @@ fn handle_custom_message(
             if !main_window::is_main_window_open() {
                 main_window::show_main_window(&mut ctx.config, &ctx.config_path, &mut ctx.dictionary, &ctx.history, &ctx.i18n, ctx.msg_hwnd);
             } else {
-                // Already open — just bring to front
                 main_window::show_main_window(&mut ctx.config, &ctx.config_path, &mut ctx.dictionary, &ctx.history, &ctx.i18n, ctx.msg_hwnd);
             }
         }
@@ -562,15 +898,10 @@ fn handle_custom_message(
     }
 }
 
-// ── Timer handler ─────────────────────────────────────────────────────
+// ── Max duration timer handler ────────────────────────────────────────
 
-fn handle_timer(ctx: &mut AppContext, wparam: WPARAM, rt: &Arc<tokio::runtime::Runtime>) {
-    let timer_id = wparam.0;
-    if timer_id != TIMER_MAX_DURATION {
-        return;
-    }
-
-    // Only act if we're currently recording
+#[cfg(target_os = "linux")]
+fn handle_max_duration_timer(ctx: &mut AppContext, rt: &Arc<tokio::runtime::Runtime>) {
     if !matches!(ctx.state, AppState::Recording(_)) {
         return;
     }
@@ -584,11 +915,40 @@ fn handle_timer(ctx: &mut AppContext, wparam: WPARAM, rt: &Arc<tokio::runtime::R
         let elapsed = start.elapsed().as_secs();
         if elapsed >= max_dur {
             log::info!("Max recording duration reached ({}s), auto-submitting", max_dur);
-            // Stop the timer before dispatching event
+            if let Some(source_id) = ctx.max_duration_timer_id.take() {
+                source_id.remove();
+            }
+            if ctx.config.ui.show_overlay {
+                ctx.overlay.set_status("Max duration reached, submitting...").ok();
+            }
+            dispatch_event(ctx, AppEvent::HotKeyUp, rt);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn handle_timer(ctx: &mut AppContext, wparam: WPARAM, rt: &Arc<tokio::runtime::Runtime>) {
+    let timer_id = wparam.0;
+    if timer_id != TIMER_MAX_DURATION {
+        return;
+    }
+
+    if !matches!(ctx.state, AppState::Recording(_)) {
+        return;
+    }
+
+    let max_dur = ctx.config.max_recording_duration;
+    if max_dur == 0 {
+        return;
+    }
+
+    if let Some(start) = ctx.recording_start {
+        let elapsed = start.elapsed().as_secs();
+        if elapsed >= max_dur {
+            log::info!("Max recording duration reached ({}s), auto-submitting", max_dur);
             unsafe {
                 let _ = KillTimer(ctx.msg_hwnd, TIMER_MAX_DURATION);
             }
-            // Show notification about max duration
             if ctx.config.ui.show_overlay {
                 ctx.overlay.set_status("Max duration reached, submitting...").ok();
             }
@@ -616,22 +976,23 @@ fn execute_action(ctx: &mut AppContext, action: AppAction, rt: &Arc<tokio::runti
             tray::set_global_state(TrayState::Recording);
             let mut recorder = audio::AudioRecorder::new(ctx.config.sample_rate);
 
-            // Set up volume callback for the VU meter overlay
             let send_overlay = SendOverlay::from_overlay(&ctx.overlay);
             recorder.set_volume_callback(Box::new(move |level: f32| {
                 send_overlay.set_volume(level);
             }));
 
-            // For hands-free mode, set up VAD monitoring channel
             if ctx.mode == RecordingMode::HandsFree {
                 let (vad_tx, vad_rx) = std::sync::mpsc::channel::<audio::AudioChunk>();
                 recorder.set_vad_channel(vad_tx);
 
-                // Spawn VAD monitor thread (OnnxModel is not Send, must stay in one thread)
                 let vad_threshold = ctx.config.vad_threshold;
                 let silence_duration = ctx.config.silence_duration_secs;
                 let sample_rate = ctx.config.sample_rate;
-                let send_hwnd = SendHwnd::from_hwnd(ctx.msg_hwnd);
+
+                #[cfg(target_os = "windows")]
+                let vad_sender: VadSender = VadSender::Windows(SendHwnd::from_hwnd(ctx.msg_hwnd));
+                #[cfg(target_os = "linux")]
+                let vad_sender: VadSender = VadSender::Linux(ctx.tx.clone());
 
                 let vad_handle = match std::thread::Builder::new()
                     .name("vad-monitor".into())
@@ -641,13 +1002,12 @@ fn execute_action(ctx: &mut AppContext, action: AppAction, rt: &Arc<tokio::runti
                             vad_threshold,
                             silence_duration,
                             sample_rate,
-                            send_hwnd,
+                            vad_sender,
                         );
                     }) {
                     Ok(h) => h,
                     Err(e) => {
                         log::error!("Failed to spawn VAD monitor thread: {}", e);
-                        // Stop recording since we can't monitor for silence
                         if let Some(ref mut recorder) = ctx.recorder {
                             let _ = recorder.stop();
                         }
@@ -669,17 +1029,27 @@ fn execute_action(ctx: &mut AppContext, action: AppAction, rt: &Arc<tokio::runti
                     ctx.audio_rx = Some(rx);
                     ctx.recorded_samples.clear();
                     ctx.recording_start = Some(Instant::now());
+
+                    #[cfg(target_os = "linux")]
+                    {
+                        ctx.prev_window_id = std::process::Command::new("xdotool")
+                            .args(["getactivewindow"])
+                            .output()
+                            .ok()
+                            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                            .filter(|s| !s.is_empty());
+                    }
+
                     ctx.overlay.set_recording(true).ok();
 
-                    // Set recording start timestamp for duration display
                     let start_ms = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_millis() as u64;
                     ctx.overlay.set_recording_start(start_ms).ok();
 
-                    // Start a periodic timer to check for max recording duration
                     if ctx.config.max_recording_duration > 0 {
+                        #[cfg(target_os = "windows")]
                         unsafe {
                             let _ = SetTimer(
                                 ctx.msg_hwnd,
@@ -688,38 +1058,49 @@ fn execute_action(ctx: &mut AppContext, action: AppAction, rt: &Arc<tokio::runti
                                 None,
                             );
                         }
+                        #[cfg(target_os = "linux")]
+                        {
+                            let tx_timer = ctx.tx.clone();
+                            let source_id = gtk4::glib::timeout_add_local(
+                                Duration::from_millis(MAX_DURATION_CHECK_INTERVAL_MS as u64),
+                                move || {
+                                    let _ = tx_timer.send(AppMessage::MaxDurationTimer);
+                                    gtk4::glib::ControlFlow::Continue
+                                },
+                            );
+                            ctx.max_duration_timer_id = Some(source_id);
+                        }
                     }
                 }
                 Err(e) => {
                     log::error!("Failed to start recording: {}", e);
                     ctx.state = AppState::Idle;
-                    // Clean up VAD thread if it was started
                     ctx.vad_thread = None;
                 }
             }
         }
 
         AppAction::StopRecording => {
-            // Stop the recorder first (drops the stream, which stops audio capture)
             if let Some(ref mut recorder) = ctx.recorder {
                 let _ = recorder.stop();
             }
             ctx.recorder = None;
 
-            // Drain the receiver to collect all recorded samples
             if let Some(ref mut rx) = ctx.audio_rx {
                 ctx.recorded_samples = audio::collect_chunks(rx);
             }
             ctx.audio_rx = None;
 
-            // Stop VAD monitor thread (dropping the sender in stop() will cause
-            // the receiver to return Err, which exits the VAD thread loop)
             if let Some(vad_handle) = ctx.vad_thread.take() {
                 let _ = vad_handle.join();
             }
 
-            // Kill the max duration timer
+            #[cfg(target_os = "windows")]
             unsafe { let _ = KillTimer(ctx.msg_hwnd, TIMER_MAX_DURATION); }
+            #[cfg(target_os = "linux")]
+            if let Some(source_id) = ctx.max_duration_timer_id.take() {
+                source_id.remove();
+            }
 
             ctx.overlay.set_recording(false).ok();
 
@@ -727,7 +1108,6 @@ fn execute_action(ctx: &mut AppContext, action: AppAction, rt: &Arc<tokio::runti
             let duration = sample_count as f64 / ctx.config.sample_rate as f64;
             log::info!("Stopped recording: {} samples ({:.2}s)", sample_count, duration);
 
-            // Min recording duration check: discard recordings shorter than 1 second
             if duration < MIN_RECORDING_DURATION_SECS {
                 log::info!("Recording too short ({:.2}s < {:.1}s), discarded", duration, MIN_RECORDING_DURATION_SECS);
                 ctx.state = AppState::Idle;
@@ -736,10 +1116,8 @@ fn execute_action(ctx: &mut AppContext, action: AppAction, rt: &Arc<tokio::runti
                 return;
             }
 
-            // Update tray state to processing
             tray::set_global_state(TrayState::Processing);
 
-            // If we have samples, encode to WAV and send to ASR
             if !ctx.recorded_samples.is_empty() {
                 match audio::encode_wav(&ctx.recorded_samples, ctx.config.sample_rate) {
                     Ok(wav_data) => {
@@ -759,16 +1137,12 @@ fn execute_action(ctx: &mut AppContext, action: AppAction, rt: &Arc<tokio::runti
         }
 
         AppAction::PasteText(raw_asr_text) => {
-            // Mark overlay as processing (spinner animation)
             ctx.overlay.set_processing(true).ok();
 
-            // Store the raw ASR text before post-processing
             let original_text = raw_asr_text.clone();
 
-            // Run synchronous post-processing pipeline
             let mut processed = postprocess::postprocess(&raw_asr_text, &ctx.config.post_processing);
 
-            // Run optional LLM post-processing if configured
             if ctx.config.post_processing.llm_url.is_some() {
                 let dict_hint = ctx.dictionary.format_for_prompt();
                 let hint_opt = if dict_hint.is_empty() { None } else { Some(dict_hint.as_str()) };
@@ -783,13 +1157,21 @@ fn execute_action(ctx: &mut AppContext, action: AppAction, rt: &Arc<tokio::runti
                 }
             }
 
-            // Save clipboard before pasting, then paste and schedule restore
             let saved = clipboard::save_clipboard();
+            ctx.overlay.hide().ok();
+
+            #[cfg(target_os = "linux")]
+            if let Some(ref win_id) = ctx.prev_window_id {
+                let _ = std::process::Command::new("xdotool")
+                    .args(["windowactivate", "--sync", win_id])
+                    .output();
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+
             match clipboard::paste_text(&processed) {
                 Ok(()) => {
                     log::info!("Text pasted successfully");
                     ctx.overlay.set_processing(false).ok();
-                    // Save to history (use processed text, store original ASR text as raw)
                     let duration_secs = ctx.recording_start
                         .map(|t| t.elapsed().as_secs_f64())
                         .unwrap_or(0.0);
@@ -806,14 +1188,17 @@ fn execute_action(ctx: &mut AppContext, action: AppAction, rt: &Arc<tokio::runti
                     ctx.history.add(entry).ok();
                     ctx.recording_start = None;
 
-                    // Schedule clipboard restore on a background thread
                     std::thread::spawn(move || {
                         clipboard::restore_clipboard(saved);
                     });
 
-                    // Post PasteComplete to transition state
+                    #[cfg(target_os = "windows")]
                     unsafe {
                         let _ = PostMessageW(ctx.msg_hwnd, WM_PASTE_COMPLETE, WPARAM(0), LPARAM(0));
+                    }
+                    #[cfg(target_os = "linux")]
+                    {
+                        send_app_message(&ctx.tx, AppMessage::PasteComplete);
                     }
                 }
                 Err(e) => {
@@ -857,7 +1242,6 @@ fn execute_action(ctx: &mut AppContext, action: AppAction, rt: &Arc<tokio::runti
         }
 
         AppAction::HideOverlay => {
-            // Save overlay position before hiding
             let (pos_x, pos_y) = ctx.overlay.save_position();
             if pos_x >= 0 && pos_y >= 0 {
                 ctx.config.ui.overlay_x = Some(pos_x);
@@ -873,26 +1257,27 @@ fn execute_action(ctx: &mut AppContext, action: AppAction, rt: &Arc<tokio::runti
         }
 
         AppAction::CancelRecording(partial_text) => {
-            // Stop the recorder if still running
             if let Some(ref mut recorder) = ctx.recorder {
                 let _ = recorder.stop();
             }
             ctx.recorder = None;
             ctx.audio_rx = None;
 
-            // Stop VAD thread
             if let Some(vad_handle) = ctx.vad_thread.take() {
                 let _ = vad_handle.join();
             }
 
-            // Kill the max duration timer
+            #[cfg(target_os = "windows")]
             unsafe { let _ = KillTimer(ctx.msg_hwnd, TIMER_MAX_DURATION); }
+            #[cfg(target_os = "linux")]
+            if let Some(source_id) = ctx.max_duration_timer_id.take() {
+                source_id.remove();
+            }
 
             ctx.overlay.set_recording(false).ok();
             ctx.overlay.set_processing(false).ok();
             ctx.overlay.hide().ok();
 
-            // Save cancelled entry to history
             let duration_secs = ctx.recording_start
                 .map(|t| t.elapsed().as_secs_f64())
                 .unwrap_or(0.0);
@@ -922,6 +1307,7 @@ fn execute_action(ctx: &mut AppContext, action: AppAction, rt: &Arc<tokio::runti
 
 // ── ASR request ───────────────────────────────────────────────────────
 
+#[cfg(target_os = "windows")]
 fn send_to_asr(ctx: &mut AppContext, wav_data: Vec<u8>, rt: &Arc<tokio::runtime::Runtime>) {
     let asr_url = ctx.config.asr_url.clone();
     let api_key = ctx.config.api_key.clone();
@@ -930,7 +1316,6 @@ fn send_to_asr(ctx: &mut AppContext, wav_data: Vec<u8>, rt: &Arc<tokio::runtime:
     ctx.asr_handle = Some(rt.spawn(async move {
         let client = asr_client::AsrClient::new(asr_url, api_key);
         let result = client.transcribe(&wav_data).await;
-        // Reconstruct HWND only after the await, so it's not held across it
         let post_hwnd = send_hwnd.to_hwnd();
         match result {
             Ok(text) => {
@@ -950,29 +1335,76 @@ fn send_to_asr(ctx: &mut AppContext, wav_data: Vec<u8>, rt: &Arc<tokio::runtime:
     }));
 }
 
+#[cfg(target_os = "linux")]
+fn send_to_asr(ctx: &mut AppContext, wav_data: Vec<u8>, rt: &Arc<tokio::runtime::Runtime>) {
+    let asr_url = ctx.config.asr_url.clone();
+    let api_key = ctx.config.api_key.clone();
+    let tx = ctx.tx.clone();
+
+    ctx.asr_handle = Some(rt.spawn(async move {
+        let client = asr_client::AsrClient::new(asr_url, api_key);
+        let result = client.transcribe(&wav_data).await;
+        match result {
+            Ok(text) => {
+                send_app_message(&tx, AppMessage::AsrResult(text));
+            }
+            Err(e) => {
+                send_app_message(&tx, AppMessage::AsrError(format!("{}", e)));
+            }
+        }
+    }));
+}
+
 // ── VAD Monitor Thread ────────────────────────────────────────────────
 
-/// Runs on a dedicated std::thread. Reads audio chunks from the channel,
-/// runs Silero VAD on each chunk, and posts silence/speech events to the
-/// UI thread via PostMessageW.
-///
-/// The thread exits when the sender is dropped (i.e. when recording stops).
+enum VadSender {
+    #[cfg(target_os = "windows")]
+    Windows(SendHwnd),
+    #[cfg(target_os = "linux")]
+    Linux(mpsc::UnboundedSender<AppMessage>),
+}
+
+fn vad_send(sender: &VadSender, msg: AppMessage) {
+    match sender {
+        #[cfg(target_os = "windows")]
+        VadSender::Windows(send_hwnd) => {
+            let hwnd = send_hwnd.to_hwnd();
+            unsafe {
+                match msg {
+                    AppMessage::SilenceTimeout => {
+                        let _ = PostMessageW(hwnd, WM_SILENCE_TIMEOUT, WPARAM(0), LPARAM(0));
+                    }
+                    AppMessage::VadSilenceStart => {
+                        let _ = PostMessageW(hwnd, WM_VAD_SILENCE_START, WPARAM(0), LPARAM(0));
+                    }
+                    AppMessage::VadSilenceEnd => {
+                        let _ = PostMessageW(hwnd, WM_VAD_SILENCE_END, WPARAM(0), LPARAM(0));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        #[cfg(target_os = "linux")]
+        VadSender::Linux(tx) => {
+            send_app_message(tx, msg);
+        }
+    }
+}
+
 fn vad_monitor_thread(
     rx: std::sync::mpsc::Receiver<audio::AudioChunk>,
     vad_threshold: f32,
     silence_duration_secs: f64,
     sample_rate: u32,
-    send_hwnd: SendHwnd,
+    sender: VadSender,
 ) {
     log::info!("VAD monitor thread started (threshold={}, silence={}s)", vad_threshold, silence_duration_secs);
 
-    // Initialize VAD detector
     let mut vad = match vad::VadDetector::new(sample_rate, vad_threshold) {
         Ok(v) => v,
         Err(e) => {
             log::error!("Failed to initialize VAD: {}. Falling back to timer-based silence.", e);
-            // Fallback: simple timer-based silence detection
-            fallback_silence_timer(rx, silence_duration_secs, send_hwnd);
+            fallback_silence_timer(rx, silence_duration_secs, sender);
             return;
         }
     };
@@ -980,50 +1412,34 @@ fn vad_monitor_thread(
     let chunk_size = vad.chunk_size();
     let mut sample_buffer: Vec<f32> = Vec::with_capacity(chunk_size * 2);
 
-    // State tracking
     let mut is_silence = false;
     let mut silence_start: Option<Instant> = None;
 
-    // Accumulate enough samples for one VAD chunk, then process
     for chunk in rx.iter() {
         sample_buffer.extend_from_slice(&chunk);
 
-        // Process in VAD-sized chunks
         while sample_buffer.len() >= chunk_size {
             let vad_chunk: Vec<f32> = sample_buffer.drain(..chunk_size).collect();
             let has_speech = vad.is_speech(&vad_chunk);
 
-            let hwnd = send_hwnd.to_hwnd();
-
             if has_speech {
                 if is_silence {
-                    // Speech resumed after silence
                     log::debug!("VAD: speech resumed");
                     is_silence = false;
                     silence_start = None;
-                    unsafe {
-                        let _ = PostMessageW(hwnd, WM_VAD_SILENCE_END, WPARAM(0), LPARAM(0));
-                    }
+                    vad_send(&sender, AppMessage::VadSilenceEnd);
                 }
             } else {
-                // No speech detected
                 if !is_silence {
-                    // Transition to silence
                     log::debug!("VAD: silence started");
                     is_silence = true;
                     silence_start = Some(Instant::now());
-                    unsafe {
-                        let _ = PostMessageW(hwnd, WM_VAD_SILENCE_START, WPARAM(0), LPARAM(0));
-                    }
+                    vad_send(&sender, AppMessage::VadSilenceStart);
                 } else if let Some(start) = silence_start {
-                    // Check if silence has exceeded the threshold
                     let elapsed = start.elapsed().as_secs_f64();
                     if elapsed >= silence_duration_secs {
                         log::info!("VAD: silence timeout ({:.1}s >= {:.1}s)", elapsed, silence_duration_secs);
-                        unsafe {
-                            let _ = PostMessageW(hwnd, WM_SILENCE_TIMEOUT, WPARAM(0), LPARAM(0));
-                        }
-                        // Exit the loop — recording will be stopped by the UI thread
+                        vad_send(&sender, AppMessage::SilenceTimeout);
                         return;
                     }
                 }
@@ -1031,25 +1447,18 @@ fn vad_monitor_thread(
         }
     }
 
-    // Channel closed — recording stopped
     log::info!("VAD monitor thread exiting (channel closed)");
 }
 
-/// Fallback timer-based silence detection when VAD fails to initialize.
-/// Simply waits for the configured silence duration and posts WM_SILENCE_TIMEOUT.
 fn fallback_silence_timer(
     rx: std::sync::mpsc::Receiver<audio::AudioChunk>,
     silence_duration_secs: f64,
-    send_hwnd: SendHwnd,
+    sender: VadSender,
 ) {
     let start = Instant::now();
-    // Drain the channel to keep it alive, but ignore the data
     for _chunk in rx.iter() {
         if start.elapsed().as_secs_f64() >= silence_duration_secs {
-            let hwnd = send_hwnd.to_hwnd();
-            unsafe {
-                let _ = PostMessageW(hwnd, WM_SILENCE_TIMEOUT, WPARAM(0), LPARAM(0));
-            }
+            vad_send(&sender, AppMessage::SilenceTimeout);
             return;
         }
     }
@@ -1058,7 +1467,6 @@ fn fallback_silence_timer(
 // ── Cleanup ───────────────────────────────────────────────────────────
 
 fn cleanup(ctx: &mut AppContext, rt: Arc<tokio::runtime::Runtime>) {
-    // Close the main window if it's open
     main_window::close_main_window();
 
     if ctx.recorder.is_some() {
@@ -1069,7 +1477,6 @@ fn cleanup(ctx: &mut AppContext, rt: Arc<tokio::runtime::Runtime>) {
         ctx.audio_rx = None;
     }
 
-    // Join VAD thread
     if let Some(vad_handle) = ctx.vad_thread.take() {
         let _ = vad_handle.join();
     }
@@ -1081,9 +1488,6 @@ fn cleanup(ctx: &mut AppContext, rt: Arc<tokio::runtime::Runtime>) {
         handle.abort();
     }
 
-    // shutdown_timeout takes Runtime by value — we own Arc, so we can
-    // try to get exclusive ownership. If other references exist, just
-    // drop our reference and let the background threads finish naturally.
     match Arc::try_unwrap(rt) {
         Ok(runtime) => {
             runtime.shutdown_timeout(Duration::from_secs(2));

@@ -1,63 +1,106 @@
 //! Main application window with tabbed interface.
 //!
-//! Creates a top-level window with a Win32 Tab control containing:
-//! - Settings tab (configuration editor)
-//! - History tab (dictation history viewer)
-//! - About tab (version, project info, ASR status)
-
-use std::sync::atomic::{AtomicPtr, Ordering};
-use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::SystemServices::*;
-use windows::Win32::UI::Controls::*;
-use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{PCWSTR, PWSTR};
+//! On Windows: Creates a top-level window with a Win32 Tab control.
+//! On Linux: Creates a GTK4 Window with a Notebook.
 
 use crate::config::AppConfig;
 use crate::dictionary::DictionaryManager;
 use crate::history::HistoryManager;
 use crate::i18n::I18n;
 
-/// Main window class name.
-const MAIN_CLASS_NAME: &str = "Qwen3AsrMainWnd";
-
-/// Tab control IDs.
-const IDC_TABCTRL: usize = 3001;
-
-/// Tab indices.
-const TAB_SETTINGS: i32 = 0;
-const TAB_HISTORY: i32 = 1;
-const TAB_ABOUT: i32 = 2;
-
-/// About page control IDs.
-const IDC_ABOUT_VERSION: usize = 3101;
-const IDC_ABOUT_DESC: usize = 3103;
-const IDC_ABOUT_ASR_STATUS: usize = 3104;
-const IDC_ABOUT_GITHUB: usize = 3105;
-
-/// Version string embedded at compile time.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Track the open main window.
+// ── Shared helpers (platform-independent) ──────────────────────────────
+
+/// Format the ASR status text for the About page.
+fn format_asr_status(i18n: &I18n, config: &AppConfig) -> String {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap_or_else(|_| reqwest::blocking::Client::new());
+    let url = format!("{}/v1/health", config.asr_url);
+    match client.get(&url).send() {
+        Ok(resp) if resp.status().is_success() => {
+            format!("{} ✓", i18n.t("about.asr_connected"))
+        }
+        _ => {
+            format!("{} ✗", i18n.t("about.asr_disconnected"))
+        }
+    }
+}
+
+// ── Windows implementation ─────────────────────────────────────────────
+
+#[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicPtr, Ordering};
+
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::*;
+
+#[cfg(target_os = "windows")]
+use windows::Win32::Graphics::Gdi::*;
+
+#[cfg(target_os = "windows")]
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+
+#[cfg(target_os = "windows")]
+use windows::Win32::System::SystemServices::*;
+
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::Controls::*;
+
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::*;
+
+#[cfg(target_os = "windows")]
+use windows::core::{PCWSTR, PWSTR};
+
+#[cfg(target_os = "windows")]
+const MAIN_CLASS_NAME: &str = "Qwen3AsrMainWnd";
+
+#[cfg(target_os = "windows")]
+const IDC_TABCTRL: usize = 3001;
+
+#[cfg(target_os = "windows")]
+const TAB_SETTINGS: i32 = 0;
+
+#[cfg(target_os = "windows")]
+const TAB_HISTORY: i32 = 1;
+
+#[cfg(target_os = "windows")]
+const TAB_ABOUT: i32 = 2;
+
+#[cfg(target_os = "windows")]
+const IDC_ABOUT_VERSION: usize = 3101;
+
+#[cfg(target_os = "windows")]
+const IDC_ABOUT_DESC: usize = 3103;
+
+#[cfg(target_os = "windows")]
+const IDC_ABOUT_ASR_STATUS: usize = 3104;
+
+#[cfg(target_os = "windows")]
+const IDC_ABOUT_GITHUB: usize = 3105;
+
+#[cfg(target_os = "windows")]
 static MAIN_HWND: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
-/// Global: config pointer for the main window.
+#[cfg(target_os = "windows")]
 static MAIN_CONFIG: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
-/// Global: dictionary pointer for the main window.
+#[cfg(target_os = "windows")]
 static MAIN_DICT: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
-/// Global: history pointer for the main window.
+#[cfg(target_os = "windows")]
 static MAIN_HISTORY: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
-/// Global: I18n pointer for the main window.
+#[cfg(target_os = "windows")]
 static MAIN_I18N: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
-/// Global: config_path pointer for save-on-close.
+#[cfg(target_os = "windows")]
 static MAIN_CONFIG_PATH: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
-/// Show the main window. If already open, bring to front.
+#[cfg(target_os = "windows")]
 pub fn show_main_window(
     config: &mut AppConfig,
     config_path: &std::path::Path,
@@ -71,25 +114,23 @@ pub fn show_main_window(
         let hwnd = HWND(raw);
         if unsafe { IsWindow(hwnd).as_bool() } {
             let _ = unsafe { SetForegroundWindow(hwnd) };
-            // If minimized, restore
             let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
             return;
         }
     }
 
-    // Store pointers for the WndProc to access
     MAIN_CONFIG.store(config as *mut AppConfig as *mut std::ffi::c_void, Ordering::SeqCst);
     MAIN_DICT.store(dictionary as *mut DictionaryManager as *mut std::ffi::c_void, Ordering::SeqCst);
     MAIN_HISTORY.store(history as *const HistoryManager as *const std::ffi::c_void as *mut std::ffi::c_void, Ordering::SeqCst);
     MAIN_I18N.store(i18n as *const I18n as *const std::ffi::c_void as *mut std::ffi::c_void, Ordering::SeqCst);
 
-    // Store config_path as a leaked Box (valid for app lifetime)
     let config_path_box = Box::new(config_path.to_path_buf());
     MAIN_CONFIG_PATH.store(Box::into_raw(config_path_box) as *mut std::ffi::c_void, Ordering::SeqCst);
 
     let _ = unsafe { create_main_window(parent, config, dictionary, history, i18n) };
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn create_main_window(
     parent: HWND,
     config: &AppConfig,
@@ -99,7 +140,6 @@ unsafe fn create_main_window(
 ) -> anyhow::Result<()> {
     let hinstance: HINSTANCE = GetModuleHandleW(None)?.into();
 
-    // Register window class (ignore failure — may already be registered)
     let class_name = ew(MAIN_CLASS_NAME);
     let wc = WNDCLASSW {
         style: CS_HREDRAW | CS_VREDRAW,
@@ -130,17 +170,13 @@ unsafe fn create_main_window(
 
     MAIN_HWND.store(hwnd.0, Ordering::SeqCst);
 
-    // Create tab control
     let tab_ctrl = create_tab_control(hwnd, hinstance, i18n);
     let _ = SendMessageW(tab_ctrl, WM_SETFONT, WPARAM(GetStockObject(DEFAULT_GUI_FONT).0 as usize), LPARAM(1));
 
-    // Create tab pages as child windows (initially hidden except first)
     let settings_page = crate::settings::create_settings_page(hwnd, hinstance, config, dictionary, i18n);
     let history_page = crate::history_ui::create_history_page(hwnd, hinstance, history, i18n);
     let about_page = create_about_page(hwnd, hinstance, i18n, config);
 
-    // Store page HWNDs in window data (GWLP_USERDATA)
-    // We'll pack 3 HWNDs into a Box<dyn Any> - actually, let's use a simple struct
     let pages = Box::new(TabPages {
         tab_ctrl,
         settings_page,
@@ -150,17 +186,15 @@ unsafe fn create_main_window(
     let pages_ptr = Box::into_raw(pages) as isize;
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, pages_ptr);
 
-    // Position pages inside the tab control display area
     resize_pages(hwnd, tab_ctrl, settings_page, history_page, about_page);
 
-    // Show settings page by default
     let _ = ShowWindow(settings_page, SW_SHOW);
     let _ = UpdateWindow(hwnd);
 
     Ok(())
 }
 
-/// Stored tab page handles.
+#[cfg(target_os = "windows")]
 struct TabPages {
     tab_ctrl: HWND,
     settings_page: HWND,
@@ -168,7 +202,7 @@ struct TabPages {
     about_page: HWND,
 }
 
-/// Get window position and size from config.
+#[cfg(target_os = "windows")]
 fn get_window_geometry(config: &AppConfig) -> (i32, i32, i32, i32) {
     let x = config.ui.main_window_x.unwrap_or(CW_USEDEFAULT);
     let y = config.ui.main_window_y.unwrap_or(CW_USEDEFAULT);
@@ -177,9 +211,8 @@ fn get_window_geometry(config: &AppConfig) -> (i32, i32, i32, i32) {
     (x, y, w, h)
 }
 
-/// Create the tab control with 3 tabs.
+#[cfg(target_os = "windows")]
 unsafe fn create_tab_control(hwnd: HWND, hinstance: HINSTANCE, i18n: &I18n) -> HWND {
-    // Initialize common controls for tab control
     let icc = INITCOMMONCONTROLSEX {
         dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
         dwICC: ICC_TAB_CLASSES,
@@ -191,7 +224,7 @@ unsafe fn create_tab_control(hwnd: HWND, hinstance: HINSTANCE, i18n: &I18n) -> H
         PCWSTR(ew("SysTabControl32").as_ptr()),
         PCWSTR::null(),
         WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-        0, 0, 0, 0, // Will be positioned by resize_pages
+        0, 0, 0, 0,
         hwnd,
         HMENU(IDC_TABCTRL as *mut core::ffi::c_void),
         hinstance,
@@ -199,7 +232,6 @@ unsafe fn create_tab_control(hwnd: HWND, hinstance: HINSTANCE, i18n: &I18n) -> H
     )
     .unwrap_or_default();
 
-    // Add tabs
     let tab_labels = [
         i18n.t("main.tab_settings"),
         i18n.t("main.tab_history"),
@@ -224,11 +256,11 @@ unsafe fn create_tab_control(hwnd: HWND, hinstance: HINSTANCE, i18n: &I18n) -> H
     tab
 }
 
-/// Create the About tab page.
+#[cfg(target_os = "windows")]
 unsafe fn create_about_page(parent: HWND, hinstance: HINSTANCE, i18n: &I18n, config: &AppConfig) -> HWND {
     let page = CreateWindowExW(
         WS_EX_LEFT,
-        PCWSTR(ew("STATIC").as_ptr()), // Using STATIC class as container; will use child controls
+        PCWSTR(ew("STATIC").as_ptr()),
         PCWSTR::null(),
         WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
         0, 0, 0, 0,
@@ -244,7 +276,6 @@ unsafe fn create_about_page(parent: HWND, hinstance: HINSTANCE, i18n: &I18n, con
     let left: i32 = 20;
     let label_w: i32 = 640;
 
-    // App title
     let title_text = format!("Qwen3-ASR Typeless v{}", VERSION);
     let h = CreateWindowExW(
         WS_EX_LEFT,
@@ -261,7 +292,6 @@ unsafe fn create_about_page(parent: HWND, hinstance: HINSTANCE, i18n: &I18n, con
     let _ = SendMessageW(h, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
     y += 35;
 
-    // Description
     let desc = i18n.t("about.description");
     let h = CreateWindowExW(
         WS_EX_LEFT,
@@ -278,7 +308,6 @@ unsafe fn create_about_page(parent: HWND, hinstance: HINSTANCE, i18n: &I18n, con
     let _ = SendMessageW(h, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
     y += 30;
 
-    // Project link
     let github_text = "https://github.com/LanceLRQ/qwen3-asr-service";
     let h = CreateWindowExW(
         WS_EX_LEFT,
@@ -295,7 +324,6 @@ unsafe fn create_about_page(parent: HWND, hinstance: HINSTANCE, i18n: &I18n, con
     let _ = SendMessageW(h, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
     y += 35;
 
-    // ASR Status
     let status_label = i18n.t("about.asr_status");
     let h = CreateWindowExW(
         WS_EX_LEFT,
@@ -327,7 +355,6 @@ unsafe fn create_about_page(parent: HWND, hinstance: HINSTANCE, i18n: &I18n, con
     let _ = SendMessageW(h, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
     y += 30;
 
-    // Language info
     let lang_text = format!("Language: {} ({})", i18n.lang().display_name(), config.ui.language);
     let h = CreateWindowExW(
         WS_EX_LEFT,
@@ -346,36 +373,15 @@ unsafe fn create_about_page(parent: HWND, hinstance: HINSTANCE, i18n: &I18n, con
     page
 }
 
-/// Format the ASR status text for the About page.
-fn format_asr_status(i18n: &I18n, config: &AppConfig) -> String {
-    // Do a quick synchronous health check
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .unwrap_or_else(|_| reqwest::blocking::Client::new());
-    let url = format!("{}/v1/health", config.asr_url);
-    match client.get(&url).send() {
-        Ok(resp) if resp.status().is_success() => {
-            format!("{} ✓", i18n.t("about.asr_connected"))
-        }
-        _ => {
-            format!("{} ✗", i18n.t("about.asr_disconnected"))
-        }
-    }
-}
-
-/// Position tab pages inside the tab control display area.
+#[cfg(target_os = "windows")]
 unsafe fn resize_pages(hwnd: HWND, tab_ctrl: HWND, settings_page: HWND, history_page: HWND, about_page: HWND) {
     let mut rect = RECT::default();
     let _ = GetClientRect(hwnd, &mut rect);
 
-    // Fit tab control to the client area
     let _ = MoveWindow(tab_ctrl, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, true);
 
-    // Get the display area of the tab control (inside the tabs)
     let _ = SendMessageW(tab_ctrl, TCM_ADJUSTRECT, WPARAM(0), LPARAM(&mut rect as *mut RECT as isize));
 
-    // Add a small margin
     let left = rect.left + 2;
     let top = rect.top + 2;
     let width = rect.right - rect.left - 4;
@@ -386,7 +392,7 @@ unsafe fn resize_pages(hwnd: HWND, tab_ctrl: HWND, settings_page: HWND, history_
     }
 }
 
-/// Window procedure for the main window.
+#[cfg(target_os = "windows")]
 unsafe extern "system" fn main_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -395,7 +401,6 @@ unsafe extern "system" fn main_wnd_proc(
 ) -> LRESULT {
     match msg {
         WM_NOTIFY => {
-            // Tab selection change
             let nmhdr = &*(lparam.0 as *const NMHDR);
             if nmhdr.hwndFrom == get_tab_ctrl(hwnd) && nmhdr.code == TCN_SELCHANGE {
                 let pages = get_pages(hwnd);
@@ -403,12 +408,10 @@ unsafe extern "system" fn main_wnd_proc(
                     let sel = SendMessageW(pages.tab_ctrl, TCM_GETCURSEL, WPARAM(0), LPARAM(0));
                     let selected = sel.0 as i32;
 
-                    // Hide all pages
                     let _ = ShowWindow(pages.settings_page, SW_HIDE);
                     let _ = ShowWindow(pages.history_page, SW_HIDE);
                     let _ = ShowWindow(pages.about_page, SW_HIDE);
 
-                    // Show selected page
                     match selected {
                         TAB_SETTINGS => { let _ = ShowWindow(pages.settings_page, SW_SHOW); }
                         TAB_HISTORY => { let _ = ShowWindow(pages.history_page, SW_SHOW); }
@@ -422,7 +425,6 @@ unsafe extern "system" fn main_wnd_proc(
         }
 
         WM_SIZE => {
-            // Resize tab control and pages when the window is resized
             let pages = get_pages(hwnd);
             if let Some(pages) = pages {
                 resize_pages(hwnd, pages.tab_ctrl, pages.settings_page, pages.history_page, pages.about_page);
@@ -431,7 +433,6 @@ unsafe extern "system" fn main_wnd_proc(
         }
 
         WM_GETMINMAXINFO => {
-            // Set minimum window size
             let mmi = &mut *(lparam.0 as *mut MINMAXINFO);
             mmi.ptMinTrackSize.x = 500;
             mmi.ptMinTrackSize.y = 400;
@@ -439,17 +440,14 @@ unsafe extern "system" fn main_wnd_proc(
         }
 
         WM_CLOSE => {
-            // Save window position/size before closing
             save_window_geometry(hwnd);
 
-            // Destroy all child pages
             let pages = get_pages(hwnd);
             if let Some(pages) = pages {
                 let _ = DestroyWindow(pages.settings_page);
                 let _ = DestroyWindow(pages.history_page);
                 let _ = DestroyWindow(pages.about_page);
                 let _ = DestroyWindow(pages.tab_ctrl);
-                // Free the TabPages box
                 let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TabPages;
                 if !ptr.is_null() {
                     drop(Box::from_raw(ptr));
@@ -462,7 +460,6 @@ unsafe extern "system" fn main_wnd_proc(
             MAIN_HISTORY.store(std::ptr::null_mut(), Ordering::SeqCst);
             MAIN_I18N.store(std::ptr::null_mut(), Ordering::SeqCst);
 
-            // Free config_path
             let path_ptr = MAIN_CONFIG_PATH.swap(std::ptr::null_mut(), Ordering::SeqCst);
             if !path_ptr.is_null() {
                 drop(Box::from_raw(path_ptr as *mut std::path::PathBuf));
@@ -481,7 +478,7 @@ unsafe extern "system" fn main_wnd_proc(
     }
 }
 
-/// Get the tab control HWND from the stored TabPages.
+#[cfg(target_os = "windows")]
 unsafe fn get_tab_ctrl(hwnd: HWND) -> HWND {
     let pages = get_pages(hwnd);
     match pages {
@@ -490,7 +487,7 @@ unsafe fn get_tab_ctrl(hwnd: HWND) -> HWND {
     }
 }
 
-/// Get the TabPages struct from window user data.
+#[cfg(target_os = "windows")]
 unsafe fn get_pages(hwnd: HWND) -> Option<&'static TabPages> {
     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TabPages;
     if ptr.is_null() {
@@ -500,7 +497,7 @@ unsafe fn get_pages(hwnd: HWND) -> Option<&'static TabPages> {
     }
 }
 
-/// Save window position and size to config.
+#[cfg(target_os = "windows")]
 fn save_window_geometry(hwnd: HWND) {
     let config_ptr = MAIN_CONFIG.load(Ordering::SeqCst);
     if config_ptr.is_null() {
@@ -510,7 +507,6 @@ fn save_window_geometry(hwnd: HWND) {
     let mut rect = RECT::default();
     let _ = unsafe { GetWindowRect(hwnd, &mut rect) };
 
-    // Only save if the window is not minimized
     let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) };
     if style as u32 & WS_MINIMIZE.0 != 0 {
         return;
@@ -522,7 +518,6 @@ fn save_window_geometry(hwnd: HWND) {
     config.ui.main_window_w = rect.right - rect.left;
     config.ui.main_window_h = rect.bottom - rect.top;
 
-    // Save config to disk
     let path_ptr = MAIN_CONFIG_PATH.load(Ordering::SeqCst);
     if !path_ptr.is_null() {
         let config_path = unsafe { &*(path_ptr as *const std::path::PathBuf) };
@@ -532,7 +527,7 @@ fn save_window_geometry(hwnd: HWND) {
     }
 }
 
-/// Check if the main window is currently open.
+#[cfg(target_os = "windows")]
 pub fn is_main_window_open() -> bool {
     let raw = MAIN_HWND.load(Ordering::SeqCst);
     if raw.is_null() {
@@ -541,7 +536,7 @@ pub fn is_main_window_open() -> bool {
     unsafe { IsWindow(HWND(raw)).as_bool() }
 }
 
-/// Close the main window if open.
+#[cfg(target_os = "windows")]
 pub fn close_main_window() {
     let raw = MAIN_HWND.load(Ordering::SeqCst);
     if !raw.is_null() {
@@ -552,7 +547,134 @@ pub fn close_main_window() {
     }
 }
 
-/// Encode a Rust string as a null-terminated UTF-16 wide string.
+#[cfg(target_os = "windows")]
 fn ew(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0u16)).collect()
+}
+
+// ── Linux implementation ──────────────────────────────────────────────
+
+#[cfg(target_os = "linux")]
+use gtk4::prelude::*;
+
+#[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(target_os = "linux")]
+static MAIN_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "linux")]
+static mut MAIN_GTK_WINDOW_WEAK: Option<gtk4::glib::WeakRef<gtk4::Window>> = None;
+
+#[cfg(target_os = "linux")]
+pub fn show_main_window(
+    config: &mut AppConfig,
+    config_path: &std::path::Path,
+    dictionary: &mut DictionaryManager,
+    history: &HistoryManager,
+    i18n: &I18n,
+) {
+    unsafe {
+        if let Some(ref weak) = MAIN_GTK_WINDOW_WEAK {
+            if let Some(existing) = weak.upgrade() {
+                if existing.is_visible() {
+                    existing.present();
+                    return;
+                }
+            }
+        }
+    }
+
+    let window = gtk4::Window::builder()
+        .title(i18n.t("app.title"))
+        .default_width(config.ui.main_window_w)
+        .default_height(config.ui.main_window_h)
+        .build();
+
+    let notebook = gtk4::Notebook::new();
+
+    let settings_label = gtk4::Label::new(Some(i18n.t("main.tab_settings")));
+    let settings_page = crate::settings::create_settings_page_gtk(config, dictionary, i18n);
+    notebook.append_page(&settings_page, Some(&settings_label));
+
+    let history_label = gtk4::Label::new(Some(i18n.t("main.tab_history")));
+    let history_page = crate::history_ui::create_history_page_gtk(history, i18n);
+    notebook.append_page(&history_page, Some(&history_label));
+
+    let about_label = gtk4::Label::new(Some(i18n.t("main.tab_about")));
+    let about_page = create_about_page_gtk(i18n, config);
+    notebook.append_page(&about_page, Some(&about_label));
+
+    window.set_child(Some(&notebook));
+
+    let config_path_owned = config_path.to_path_buf();
+    let config_ptr = config as *mut AppConfig as *mut std::ffi::c_void;
+    window.connect_close_request(move |_win| {
+        MAIN_WINDOW_OPEN.store(false, Ordering::SeqCst);
+        unsafe {
+            MAIN_GTK_WINDOW_WEAK = None;
+        }
+        let config = unsafe { &mut *(config_ptr as *mut AppConfig) };
+        let _ = config.save(&config_path_owned);
+        gtk4::glib::Propagation::Proceed
+    });
+
+    let weak = gtk4::glib::WeakRef::new();
+    weak.set(Some(&window));
+    unsafe {
+        MAIN_GTK_WINDOW_WEAK = Some(weak);
+    }
+    MAIN_WINDOW_OPEN.store(true, Ordering::SeqCst);
+
+    window.show();
+}
+
+#[cfg(target_os = "linux")]
+fn create_about_page_gtk(i18n: &I18n, config: &AppConfig) -> gtk4::Box {
+    let box_ = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+    box_.set_margin_top(20);
+    box_.set_margin_bottom(20);
+    box_.set_margin_start(20);
+    box_.set_margin_end(20);
+
+    let title = format!("Qwen3-ASR Typeless v{}", VERSION);
+    let title_label = gtk4::Label::new(Some(&title));
+    title_label.set_halign(gtk4::Align::Start);
+    box_.append(&title_label);
+
+    let desc = gtk4::Label::new(Some(i18n.t("about.description")));
+    desc.set_halign(gtk4::Align::Start);
+    box_.append(&desc);
+
+    let github = gtk4::Label::new(Some("https://github.com/LanceLRQ/qwen3-asr-service"));
+    github.set_halign(gtk4::Align::Start);
+    box_.append(&github);
+
+    let status_text = format_asr_status(i18n, config);
+    let status = gtk4::Label::new(Some(&format!("{}: {}", i18n.t("about.asr_status"), status_text)));
+    status.set_halign(gtk4::Align::Start);
+    box_.append(&status);
+
+    let lang_text = format!("Language: {} ({})", i18n.lang().display_name(), config.ui.language);
+    let lang = gtk4::Label::new(Some(&lang_text));
+    lang.set_halign(gtk4::Align::Start);
+    box_.append(&lang);
+
+    box_
+}
+
+#[cfg(target_os = "linux")]
+pub fn is_main_window_open() -> bool {
+    MAIN_WINDOW_OPEN.load(Ordering::SeqCst)
+}
+
+#[cfg(target_os = "linux")]
+pub fn close_main_window() {
+    unsafe {
+        if let Some(ref weak) = MAIN_GTK_WINDOW_WEAK {
+            if let Some(window) = weak.upgrade() {
+                window.close();
+            }
+        }
+    }
 }

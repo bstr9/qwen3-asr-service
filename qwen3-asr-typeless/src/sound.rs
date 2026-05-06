@@ -1,16 +1,21 @@
 //! Sound effects for recording state feedback.
 //!
-//! Generates short beep tones using the Windows Waveform Audio API
-//! (waveOut) and system sounds via MessageBeep. All sounds play
-//! asynchronously on background threads to avoid blocking the caller.
+//! Generates short beep tones and plays them via the platform audio API.
+//! On Windows, uses waveOut and MessageBeep. On Linux, uses rodio.
+//! All sounds play asynchronously on background threads to avoid
+//! blocking the caller.
 
+#[cfg(target_os = "windows")]
 use std::thread;
+#[cfg(target_os = "windows")]
 use windows::Win32::Media::Audio::{
     waveOutClose, waveOutOpen, waveOutPrepareHeader, waveOutReset, waveOutUnprepareHeader,
     waveOutWrite, CALLBACK_NULL, HWAVEOUT, WAVEFORMATEX, WAVEHDR, WAVE_FORMAT_PCM, WAVE_MAPPER,
     WHDR_DONE,
 };
+#[cfg(target_os = "windows")]
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::MB_ICONEXCLAMATION;
 
 /// Sample rate for generated tones.
@@ -64,15 +69,12 @@ fn generate_double_tone(
     buf
 }
 
-/// Play a PCM buffer through the default wave-out device.
-///
-/// Opens the device, prepares and writes the buffer, waits for
-/// playback to complete, then cleans up. This function blocks
-/// for the duration of the sound.
+// ── Windows: waveOut API ──────────────────────────────────────────────
+
+#[cfg(target_os = "windows")]
 fn play_pcm(samples: &[i16]) {
     let byte_len = std::mem::size_of_val(samples);
 
-    // Build WAVEFORMATEX for 16-bit PCM mono at SAMPLE_RATE
     let format = WAVEFORMATEX {
         wFormatTag: WAVE_FORMAT_PCM as u16,
         nChannels: 1,
@@ -84,14 +86,13 @@ fn play_pcm(samples: &[i16]) {
     };
 
     unsafe {
-        // Open default wave-out device
         let mut hwo: HWAVEOUT = std::mem::zeroed();
         let result = waveOutOpen(
             Some(&mut hwo),
             WAVE_MAPPER,
             &format,
-            0, // no callback
-            0, // no instance data
+            0,
+            0,
             CALLBACK_NULL,
         );
         if result != 0 {
@@ -99,7 +100,6 @@ fn play_pcm(samples: &[i16]) {
             return;
         }
 
-        // Prepare header
         let mut header: WAVEHDR = std::mem::zeroed();
         header.lpData = windows::core::PSTR(samples.as_ptr() as *mut u8);
         header.dwBufferLength = byte_len as u32;
@@ -111,7 +111,6 @@ fn play_pcm(samples: &[i16]) {
             return;
         }
 
-        // Write the buffer
         let result = waveOutWrite(hwo, std::ptr::addr_of_mut!(header), std::mem::size_of::<WAVEHDR>() as u32);
         if result != 0 {
             log::warn!("waveOutWrite failed with code {}", result);
@@ -120,8 +119,6 @@ fn play_pcm(samples: &[i16]) {
             return;
         }
 
-        // Wait for playback to finish (poll WHDR_DONE)
-        // Maximum wait: 5 seconds (safety valve)
         let max_wait = std::time::Duration::from_secs(5);
         let start = std::time::Instant::now();
         loop {
@@ -136,18 +133,44 @@ fn play_pcm(samples: &[i16]) {
             thread::sleep(std::time::Duration::from_millis(5));
         }
 
-        // Cleanup
         let _ = waveOutUnprepareHeader(hwo, std::ptr::addr_of_mut!(header), std::mem::size_of::<WAVEHDR>() as u32);
         let _ = waveOutClose(hwo);
     }
 }
+
+// ── Linux: rodio ──────────────────────────────────────────────────────
+
+#[cfg(target_os = "linux")]
+fn play_pcm(samples: &[i16]) {
+    use rodio::{OutputStream, Sink};
+
+    let (_stream, stream_handle) = match OutputStream::try_default() {
+        Ok(pair) => pair,
+        Err(e) => {
+            log::warn!("Failed to get audio output: {}", e);
+            return;
+        }
+    };
+    let sink = match Sink::try_new(&stream_handle) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("Failed to create audio sink: {}", e);
+            return;
+        }
+    };
+    let source = rodio::buffer::SamplesBuffer::new(1, 44100, samples.to_vec());
+    sink.append(source);
+    sink.sleep_until_end();
+}
+
+// ── Public API (platform-agnostic) ────────────────────────────────────
 
 /// Play a short high-pitched beep to indicate recording started.
 ///
 /// 880 Hz sine wave for 150 ms, played on a background thread.
 pub fn play_start_sound() {
     let samples = generate_tone(880, 150);
-    thread::spawn(move || play_pcm(&samples));
+    std::thread::spawn(move || play_pcm(&samples));
 }
 
 /// Play a short low-pitched double-beep to indicate recording stopped.
@@ -155,16 +178,21 @@ pub fn play_start_sound() {
 /// 440 Hz × 100 ms, 80 ms gap, 440 Hz × 100 ms, played on a background thread.
 pub fn play_stop_sound() {
     let samples = generate_double_tone(440, 100, 80);
-    thread::spawn(move || play_pcm(&samples));
+    std::thread::spawn(move || play_pcm(&samples));
 }
 
-/// Play an error sound using the system exclamation.
-///
-/// Uses `MessageBeep` with `MB_ICONEXCLAMATION` — no custom tone generation needed.
+/// Play an error sound.
+#[cfg(target_os = "windows")]
 pub fn play_error_sound() {
     unsafe {
         let _ = MessageBeep(MB_ICONEXCLAMATION);
     }
+}
+
+#[cfg(target_os = "linux")]
+pub fn play_error_sound() {
+    let samples = generate_tone(440, 200);
+    std::thread::spawn(move || play_pcm(&samples));
 }
 
 /// Play a warning tone to indicate VAD silence detected (auto-stop imminent).
@@ -172,7 +200,7 @@ pub fn play_error_sound() {
 /// 660 Hz × 200 ms, 100 ms gap, 660 Hz × 200 ms, played on a background thread.
 pub fn play_warning_sound() {
     let samples = generate_double_tone(660, 200, 100);
-    thread::spawn(move || play_pcm(&samples));
+    std::thread::spawn(move || play_pcm(&samples));
 }
 
 #[cfg(test)]

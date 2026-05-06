@@ -7,6 +7,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
+#[cfg(target_os = "windows")]
 use std::path::PathBuf;
 
 /// A single dictionary entry representing a custom word and its preferred spelling.
@@ -24,6 +25,7 @@ pub struct DictionaryEntry {
 
 /// Manages personal dictionary entries with persistence to a JSON file.
 pub struct DictionaryManager {
+    #[cfg(target_os = "windows")]
     file_path: PathBuf,
     entries: Vec<DictionaryEntry>,
 }
@@ -39,6 +41,7 @@ impl DictionaryManager {
             Vec::new()
         };
         Ok(Self {
+            #[cfg(target_os = "windows")]
             file_path,
             entries,
         })
@@ -48,12 +51,14 @@ impl DictionaryManager {
     /// Used as a last-resort fallback when no data directory is writable.
     pub fn new_in_memory() -> Self {
         Self {
+            #[cfg(target_os = "windows")]
             file_path: std::env::temp_dir().join("qwen3-asr-typeless-dictionary.json"),
             entries: Vec::new(),
         }
     }
 
     /// Add a new dictionary entry. Returns an error if a duplicate word already exists.
+    #[cfg(target_os = "windows")]
     pub fn add(
         &mut self,
         word: String,
@@ -76,6 +81,7 @@ impl DictionaryManager {
     }
 
     /// Remove an entry by its ID. Saves to disk after removal.
+    #[cfg(target_os = "windows")]
     pub fn remove(&mut self, id: &str) -> Result<()> {
         let before = self.entries.len();
         self.entries.retain(|e| e.id != id);
@@ -92,6 +98,7 @@ impl DictionaryManager {
 
     /// Case-insensitive search across word, correct_spelling, and category fields.
     /// Used by the dictionary dialog for filtering.
+    #[cfg(target_os = "windows")]
     pub fn search(&self, query: &str) -> Vec<&DictionaryEntry> {
         let query_lower = query.to_lowercase();
         self.entries
@@ -107,12 +114,14 @@ impl DictionaryManager {
     }
 
     /// Export all entries as pretty-printed JSON.
+    #[cfg(target_os = "windows")]
     pub fn export_json(&self) -> Result<String> {
         Ok(serde_json::to_string_pretty(&self.entries)?)
     }
 
     /// Import entries from a JSON string, merging with existing entries.
     /// Skips duplicates (by word, case-insensitive). Returns the number of new entries added.
+    #[cfg(target_os = "windows")]
     pub fn import_json(&mut self, json: &str) -> Result<usize> {
         let imported: Vec<DictionaryEntry> = serde_json::from_str(json)?;
         let mut added = 0;
@@ -148,6 +157,7 @@ impl DictionaryManager {
     /// Load preset dictionary entries for common professional terms.
     /// Skips any entries that already exist (by word, case-insensitive).
     /// Returns the number of new entries added.
+    #[cfg(target_os = "windows")]
     pub fn load_preset(&mut self) -> Result<usize> {
         let presets: &[(&str, &str, &str)] = &[
             // Tech
@@ -220,6 +230,7 @@ impl DictionaryManager {
     }
 
     /// Write entries to JSON file atomically (write to temp file, then rename).
+    #[cfg(target_os = "windows")]
     fn save(&self) -> Result<()> {
         if let Some(parent) = self.file_path.parent() {
             fs::create_dir_all(parent)?;
