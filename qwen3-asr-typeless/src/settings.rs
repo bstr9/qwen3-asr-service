@@ -3,13 +3,6 @@
 //! Uses raw Win32 API (CreateWindowExW) to create a modal dialog
 //! for editing application configuration.
 #[cfg(target_os = "windows")]
-use crate::config::AppConfig;
-#[cfg(target_os = "windows")]
-use crate::dictionary::DictionaryManager;
-#[cfg(target_os = "windows")]
-use crate::i18n::I18n;
-
-#[cfg(target_os = "windows")]
 mod windows_impl {
     use anyhow::Result;
     use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -2541,6 +2534,7 @@ fn keyval_to_hotkey_name(keyval: gtk4::gdk::Key, state: gtk4::gdk::ModifierType)
     }
 }
 
+#[cfg(target_os = "linux")]
 fn normalize_key_name(raw: &str) -> String {
     match raw {
         "space" => "Space".to_string(),

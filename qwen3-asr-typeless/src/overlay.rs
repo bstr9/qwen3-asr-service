@@ -30,12 +30,18 @@ const BAR_HEIGHT: i32 = 8;
 const TITLE_AREA_HEIGHT: i32 = 26;
 
 // Colors (RGB)
+#[cfg(target_os = "linux")]
 const COLOR_BG_R: f64 = 30.0 / 255.0;
+#[cfg(target_os = "linux")]
 const COLOR_BG_G: f64 = 30.0 / 255.0;
+#[cfg(target_os = "linux")]
 const COLOR_BG_B: f64 = 30.0 / 255.0;
 
+#[cfg(target_os = "linux")]
 const COLOR_BAR_BG_R: f64 = 60.0 / 255.0;
+#[cfg(target_os = "linux")]
 const COLOR_BAR_BG_G: f64 = 60.0 / 255.0;
+#[cfg(target_os = "linux")]
 const COLOR_BAR_BG_B: f64 = 60.0 / 255.0;
 
 const COLOR_GREEN_R: f64 = 0.0 / 255.0;
@@ -136,11 +142,7 @@ const COLOR_BG: u32 = 0x001E1E1E; // RGB(30, 30, 30)
 #[cfg(target_os = "windows")]
 const COLOR_BAR_BG: u32 = 0x003C3C3C; // RGB(60, 60, 60)
 #[cfg(target_os = "windows")]
-const COLOR_GREEN: u32 = 0x0050C800; // RGB(0, 200, 80)
-#[cfg(target_os = "windows")]
 const COLOR_YELLOW: u32 = 0x0000C8FF; // RGB(255, 200, 0)
-#[cfg(target_os = "windows")]
-const COLOR_RED: u32 = 0x003C3CFF; // RGB(255, 60, 60)
 #[cfg(target_os = "windows")]
 const COLOR_TEXT: u32 = 0x00FFFFFF; // RGB(255, 255, 255)
 #[cfg(target_os = "windows")]

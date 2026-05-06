@@ -3,11 +3,6 @@
 //! Uses raw Win32 API (CreateWindowExW + ListView) to display
 //! dictation history entries with copy/delete functionality.
 #[cfg(target_os = "windows")]
-use crate::history::HistoryManager;
-#[cfg(target_os = "windows")]
-use crate::i18n::I18n;
-
-#[cfg(target_os = "windows")]
 mod windows_impl {
     use std::sync::atomic::{AtomicPtr, Ordering};
     use windows::Win32::Foundation::*;

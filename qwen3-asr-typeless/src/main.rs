@@ -63,6 +63,7 @@ static mut GTK_CTX_PTR: *mut AppContext = std::ptr::null_mut();
 
 /// Cross-thread message type. On Windows, these are sent via PostMessageW
 /// with WM_APP+n message IDs. On Linux, these are sent via mpsc channel.
+#[allow(dead_code)]
 enum AppMessage {
     AsrResult(String),
     AsrError(String),
