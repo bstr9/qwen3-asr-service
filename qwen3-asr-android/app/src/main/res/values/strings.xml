@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Typeless</string>
+    <string name="title_settings">Settings</string>
+    <string name="title_history">History</string>
+    <string name="record">Record</string>
+    <string name="history">History</string>
+    <string name="settings">Settings</string>
+    <string name="tap_to_record">Tap to record</string>
+    <string name="recording">Recording…</string>
+    <string name="processing">Processing…</string>
+    <string name="pasting_result">Pasting result…</string>
+    <string name="transcription_placeholder">Transcription will appear here…</string>
+    <string name="search_hint">Search transcriptions</string>
+    <string name="copied_to_clipboard">Copied to clipboard</string>
+    <string name="delete_entry">Delete entry?</string>
+    <string name="delete_confirmation">Delete this transcription?</string>
+    <string name="mic_permission_required">Microphone permission required</string>
+</resources>

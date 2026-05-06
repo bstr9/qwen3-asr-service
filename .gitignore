@@ -150,12 +150,11 @@ asr-service/bin
 # AI agent workspace
 .agent/
 
-# Sub-projects (separate repos)
-qwen3-asr-android/
-qwen3-asr-typeless/
-
-# Build artifacts & cache
-target/
-build/
+# Sub-projects - exclude build artifacts only
+qwen3-asr-typeless/target/
+qwen3-asr-android/.gradle/
+qwen3-asr-android/build/
+qwen3-asr-android/app/build/
+qwen3-asr-android/local.properties
 *.pyc
 __pycache__/
