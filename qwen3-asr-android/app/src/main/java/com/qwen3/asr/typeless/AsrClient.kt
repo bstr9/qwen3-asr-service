@@ -50,17 +50,15 @@ class AsrClient(private val context: Context) {
      * Upload WAV audio to the ASR service and poll until the transcription is ready.
      *
      * @param wavData   Raw WAV bytes (16 kHz, mono, 16-bit PCM with WAV header)
-     * @param sampleRate Sample rate of the audio (default 16000)
      * @param language  Optional language hint (e.g. "zh", "en")
      * @return Result.success(fullText) or Result.failure(exception)
      */
     suspend fun transcribe(
         wavData: ByteArray,
-        sampleRate: Int = 16000,
         language: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val taskId = submitTask(wavData, sampleRate, language)
+            val taskId = submitTask(wavData, language)
                 .getOrElse { return@withContext Result.failure(it) }
 
             pollTask(taskId)
@@ -73,7 +71,6 @@ class AsrClient(private val context: Context) {
 
     private fun submitTask(
         wavData: ByteArray,
-        sampleRate: Int,
         language: String?
     ): Result<String> {
         val baseUrl = getAsrUrl().trimEnd('/')

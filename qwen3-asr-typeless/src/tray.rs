@@ -7,6 +7,8 @@ use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use crate::i18n::I18n;
+
 // --- Shared types ---
 
 /// Callback for tray menu actions.
@@ -77,6 +79,7 @@ pub struct TrayManager {
     recording_icon: HICON,
     processing_icon: HICON,
     disconnected_icon: HICON,
+    i18n: I18n,
 }
 
 #[cfg(target_os = "windows")]
@@ -101,6 +104,13 @@ impl TrayManager {
         let copy_len = tooltip.len().min(128);
         nid.szTip[..copy_len].copy_from_slice(&tooltip[..copy_len]);
 
+        let lang_str = crate::config::AppConfig::load(
+            &crate::config::AppConfig::default_config_path(),
+        )
+        .map(|c| c.ui.language.clone())
+        .unwrap_or_default();
+        let i18n = I18n::from_config(&lang_str);
+
         Ok(Self {
             hwnd,
             nid,
@@ -112,6 +122,7 @@ impl TrayManager {
             recording_icon,
             processing_icon,
             disconnected_icon,
+            i18n,
         })
     }
 
@@ -170,13 +181,13 @@ impl TrayManager {
                 h_menu,
                 MF_STRING,
                 IDM_OPEN,
-                PCWSTR(encode_wide_null("Open").as_ptr()),
+                PCWSTR(encode_wide_null(self.i18n.t("tray.open")).as_ptr()),
             )?;
 
             let mode_text = if self.is_handsfree.load(Ordering::SeqCst) {
-                "Mode: Hands-free"
+                self.i18n.t("tray.mode_handsfree")
             } else {
-                "Mode: Push-to-Talk"
+                self.i18n.t("tray.mode_ptt")
             };
 
             AppendMenuW(
@@ -190,26 +201,26 @@ impl TrayManager {
                 h_menu,
                 MF_STRING,
                 IDM_SHOW_HISTORY,
-                PCWSTR(encode_wide_null("History").as_ptr()),
+                PCWSTR(encode_wide_null(self.i18n.t("tray.history")).as_ptr()),
             )?;
             AppendMenuW(
                 h_menu,
                 MF_STRING,
                 IDM_SHOW_SETTINGS,
-                PCWSTR(encode_wide_null("Settings").as_ptr()),
+                PCWSTR(encode_wide_null(self.i18n.t("tray.settings")).as_ptr()),
             )?;
             AppendMenuW(h_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
             AppendMenuW(
                 h_menu,
                 MF_STRING,
                 IDM_ABOUT,
-                PCWSTR(encode_wide_null("About").as_ptr()),
+                PCWSTR(encode_wide_null(self.i18n.t("tray.about")).as_ptr()),
             )?;
             AppendMenuW(
                 h_menu,
                 MF_STRING,
                 IDM_QUIT,
-                PCWSTR(encode_wide_null("Quit").as_ptr()),
+                PCWSTR(encode_wide_null(self.i18n.t("tray.quit")).as_ptr()),
             )?;
 
             let mut point = POINT { x: 0, y: 0 };
@@ -275,11 +286,11 @@ impl TrayManager {
     pub fn update_mode_display(&mut self, is_handsfree: bool) -> Result<()> {
         self.is_handsfree.store(is_handsfree, Ordering::SeqCst);
         let tooltip = if is_handsfree {
-            "Qwen3-ASR Typeless [Hands-free]"
+            format!("Qwen3-ASR Typeless [{}]", self.i18n.t("tray.mode_handsfree"))
         } else {
-            "Qwen3-ASR Typeless [Push-to-Talk]"
+            format!("Qwen3-ASR Typeless [{}]", self.i18n.t("tray.mode_ptt"))
         };
-        self.set_tooltip(tooltip)
+        self.set_tooltip(&tooltip)
     }
 
     fn invoke_callback(&self, action: TrayAction) {
@@ -513,15 +524,17 @@ struct TraySni {
     callback: std::sync::Arc<Mutex<Option<TrayCallback>>>,
     is_handsfree: AtomicBool,
     icon_name: String,
+    i18n: I18n,
 }
 
 #[cfg(target_os = "linux")]
 impl TraySni {
-    fn new(callback: std::sync::Arc<Mutex<Option<TrayCallback>>>) -> Self {
+    fn new(callback: std::sync::Arc<Mutex<Option<TrayCallback>>>, i18n: I18n) -> Self {
         Self {
             callback,
             is_handsfree: AtomicBool::new(false),
             icon_name: "audio-input-microphone".into(),
+            i18n,
         }
     }
 
@@ -554,14 +567,14 @@ impl ksni::Tray for TraySni {
 
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         let mode_text = if self.is_handsfree.load(Ordering::SeqCst) {
-            "Mode: Hands-free"
+            self.i18n.t("tray.mode_handsfree").to_string()
         } else {
-            "Mode: Push-to-Talk"
+            self.i18n.t("tray.mode_ptt").to_string()
         };
 
         vec![
             StandardItem {
-                label: "Open".into(),
+                label: self.i18n.t("tray.open").to_string(),
                 activate: Box::new(|this: &mut Self| {
                     this.invoke_callback(TrayAction::ShowMainWindow);
                 }),
@@ -569,7 +582,7 @@ impl ksni::Tray for TraySni {
             }
             .into(),
             StandardItem {
-                label: mode_text.into(),
+                label: mode_text,
                 activate: Box::new(|this: &mut Self| {
                     this.invoke_callback(TrayAction::ToggleMode);
                 }),
@@ -578,7 +591,7 @@ impl ksni::Tray for TraySni {
             .into(),
             ksni::MenuItem::Separator,
             StandardItem {
-                label: "History".into(),
+                label: self.i18n.t("tray.history").to_string(),
                 activate: Box::new(|this: &mut Self| {
                     this.invoke_callback(TrayAction::ShowHistory);
                 }),
@@ -586,7 +599,7 @@ impl ksni::Tray for TraySni {
             }
             .into(),
             StandardItem {
-                label: "Settings".into(),
+                label: self.i18n.t("tray.settings").to_string(),
                 activate: Box::new(|this: &mut Self| {
                     this.invoke_callback(TrayAction::ShowSettings);
                 }),
@@ -595,7 +608,7 @@ impl ksni::Tray for TraySni {
             .into(),
             ksni::MenuItem::Separator,
             StandardItem {
-                label: "About".into(),
+                label: self.i18n.t("tray.about").to_string(),
                 activate: Box::new(|this: &mut Self| {
                     this.invoke_callback(TrayAction::About);
                 }),
@@ -603,7 +616,7 @@ impl ksni::Tray for TraySni {
             }
             .into(),
             StandardItem {
-                label: "Quit".into(),
+                label: self.i18n.t("tray.quit").to_string(),
                 activate: Box::new(|this: &mut Self| {
                     this.invoke_callback(TrayAction::Quit);
                 }),
@@ -620,16 +633,25 @@ pub struct TrayManager {
     is_handsfree: AtomicBool,
     current_state: TrayState,
     sni: Option<ksni::Handle<TraySni>>,
+    i18n: I18n,
 }
 
 #[cfg(target_os = "linux")]
 impl TrayManager {
     pub fn new() -> Result<Self> {
+        let lang_str = crate::config::AppConfig::load(
+            &crate::config::AppConfig::default_config_path(),
+        )
+        .map(|c| c.ui.language.clone())
+        .unwrap_or_default();
+        let i18n = I18n::from_config(&lang_str);
+
         Ok(Self {
             callback: std::sync::Arc::new(Mutex::new(None)),
             is_handsfree: AtomicBool::new(false),
             current_state: TrayState::Idle,
             sni: None,
+            i18n,
         })
     }
 
@@ -637,7 +659,7 @@ impl TrayManager {
         if self.sni.is_some() {
             return Ok(());
         }
-        let sni = TraySni::new(self.callback.clone());
+        let sni = TraySni::new(self.callback.clone(), I18n::new(self.i18n.lang()));
         let service = ksni::TrayService::new(sni);
         let handle = service.handle();
         service.spawn();

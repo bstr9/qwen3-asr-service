@@ -25,10 +25,22 @@
                 android:id="@+id/tv_status"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Tap to record"
+                android:text="@string/status_tap_to_record"
                 android:textAppearance="?attr/textAppearanceHeadline6"
                 android:textColor="?attr/colorOnSurface"
-                android:layout_marginBottom="24dp" />
+                android:layout_marginBottom="8dp" />
+
+            <!-- Recording duration display -->
+            <TextView
+                android:id="@+id/tv_duration"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0:00"
+                android:textAppearance="?attr/textAppearanceHeadline4"
+                android:textColor="?attr/colorPrimary"
+                android:visibility="gone"
+                android:layout_marginBottom="16dp"
+                android:fontFamily="monospace" />
 
             <!-- Mode toggle chips -->
             <com.google.android.material.chip.ChipGroup
@@ -41,7 +53,7 @@
                     android:id="@+id/chip_ptt"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="PTT"
+                    android:text="@string/mode_ptt"
                     android:checkable="true"
                     style="@style/Widget.Material3.Chip.Filter" />
 
@@ -49,7 +61,7 @@
                     android:id="@+id/chip_handsfree"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Hands-free"
+                    android:text="@string/mode_handsfree"
                     android:checkable="true"
                     style="@style/Widget.Material3.Chip.Filter" />
 
@@ -73,7 +85,7 @@
                         android:id="@+id/tv_result"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="Transcription will appear here..."
+                        android:text="@string/transcription_placeholder"
                         android:textAppearance="?attr/textAppearanceBody1"
                         android:textColor="?attr/colorOnSurfaceVariant" />
 
@@ -83,18 +95,35 @@
 
         </LinearLayout>
 
-        <!-- Record FAB -->
-        <com.google.android.material.floatingactionbutton.FloatingActionButton
-            android:id="@+id/fab_record"
-            android:layout_width="wrap_content"
+        <!-- Record / Cancel buttons -->
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:layout_margin="24dp"
-            android:src="@drawable/ic_mic"
-            android:contentDescription="Record"
-            app:fabSize="normal"
-            app:backgroundTint="@color/md_primary"
-            app:tint="@color/md_on_primary" />
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="8dp">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_cancel"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/btn_cancel"
+                android:visibility="gone"
+                android:layout_marginEnd="16dp" />
+
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/fab_record"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:src="@drawable/ic_mic"
+                android:contentDescription="@string/content_desc_record"
+                app:fabSize="normal"
+                app:backgroundTint="@color/md_primary"
+                app:tint="@color/md_on_primary" />
+
+        </LinearLayout>
 
         <!-- Bottom navigation -->
         <com.google.android.material.bottomnavigation.BottomNavigationView

@@ -2,6 +2,10 @@
 //!
 //! Uses the `silero-vad-rust` crate which bundles ONNX model weights
 //! and handles ONNX Runtime session creation internally.
+//!
+//! If ONNX Runtime is missing or has an incompatible version, `VadDetector::new()`
+//! returns an error instead of panicking, allowing the app to fall back to
+//! timer-based silence detection.
 
 use anyhow::{Context, Result};
 use silero_vad_rust::load_silero_vad;
@@ -20,8 +24,18 @@ impl VadDetector {
     ///
     /// `sample_rate` should be 16000 or 8000 (Silero supported rates).
     /// `threshold` is the speech probability cutoff (typically 0.5).
+    ///
+    /// Uses `catch_unwind` to intercept panics from ort's version check
+    /// (e.g., system onnxruntime.dll is 1.10.0 but ort expects 1.22.x),
+    /// converting them into a regular `Err` so the caller can fall back.
     pub fn new(sample_rate: u32, threshold: f32) -> Result<Self> {
-        let model = load_silero_vad().context("Failed to load Silero VAD model")?;
+        let model = std::panic::catch_unwind(load_silero_vad)
+            .map_err(|_| anyhow::anyhow!(
+                "ONNX Runtime initialization panicked — likely a version mismatch. \
+                 ort 2.0.0-rc.10 requires ONNX Runtime 1.22.x, but the system DLL may be an older version. \
+                 Place the correct onnxruntime.dll next to the executable or set ORT_DYLIB_PATH."
+            ))?
+            .context("Failed to load Silero VAD model")?;
 
         // Silero VAD expects chunks of 512, 768, 1024, or 1536 samples at 16 kHz
         let chunk_size = match sample_rate {

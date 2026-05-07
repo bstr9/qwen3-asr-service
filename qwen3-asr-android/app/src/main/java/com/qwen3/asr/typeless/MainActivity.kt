@@ -9,11 +9,13 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.chip.Chip
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.bottomnavigation.BottomNavigationView
@@ -23,7 +25,9 @@ import com.google.android.material.bottomnavigation.BottomNavigationView
  *
  * Features:
  *  - Large floating action button (mic icon) — tap to start/stop recording
+ *  - Cancel button — tap to cancel recording without submitting
  *  - Status text showing current state (Idle / Recording / Processing / Pasting)
+ *  - Live recording duration display
  *  - Mode toggle chip (PTT / Hands-free)
  *  - Bottom navigation: Record | History | Settings
  *  - Last transcription result display
@@ -41,7 +45,9 @@ class MainActivity : AppCompatActivity() {
 
     // Views
     private lateinit var fabRecord: FloatingActionButton
+    private lateinit var btnCancel: MaterialButton
     private lateinit var tvStatus: TextView
+    private lateinit var tvDuration: TextView
     private lateinit var tvResult: TextView
     private lateinit var chipPtt: Chip
     private lateinit var chipHandsfree: Chip
@@ -61,13 +67,29 @@ class MainActivity : AppCompatActivity() {
                 }
                 RecordingService.ACTION_TRANSCRIPTION_RESULT -> {
                     val text = intent.getStringExtra(RecordingService.EXTRA_TEXT) ?: ""
-                    val duration = intent.getFloatExtra(RecordingService.EXTRA_DURATION, 0f)
                     tvResult.text = text
-                    Toast.makeText(this@MainActivity, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, getString(R.string.copied_to_clipboard), Toast.LENGTH_SHORT).show()
                 }
                 RecordingService.ACTION_TRANSCRIPTION_ERROR -> {
-                    val error = intent.getStringExtra(RecordingService.EXTRA_ERROR) ?: "Unknown error"
-                    Toast.makeText(this@MainActivity, "Error: $error", Toast.LENGTH_LONG).show()
+                    val error = intent.getStringExtra(RecordingService.EXTRA_ERROR) ?: getString(R.string.error_unknown)
+                    Toast.makeText(this@MainActivity, getString(R.string.error_format, error), Toast.LENGTH_LONG).show()
+                }
+                RecordingService.ACTION_RECORDING_DURATION -> {
+                    val elapsedSec = intent.getFloatExtra(RecordingService.EXTRA_DURATION_SECONDS, 0f)
+                    updateDurationDisplay(elapsedSec)
+                }
+                RecordingService.ACTION_RECORDING_CANCELLED -> {
+                    tvDuration.text = "0:00"
+                    tvDuration.visibility = View.GONE
+                    Toast.makeText(this@MainActivity, getString(R.string.status_recording_cancelled), Toast.LENGTH_SHORT).show()
+                }
+                RecordingService.ACTION_TOO_SHORT -> {
+                    tvDuration.text = "0:00"
+                    tvDuration.visibility = View.GONE
+                    Toast.makeText(this@MainActivity, getString(R.string.status_too_short), Toast.LENGTH_SHORT).show()
+                }
+                RecordingService.ACTION_MAX_DURATION_REACHED -> {
+                    Toast.makeText(this@MainActivity, getString(R.string.status_max_duration), Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -92,6 +114,10 @@ class MainActivity : AppCompatActivity() {
             addAction(RecordingService.ACTION_TRANSCRIPTION_ERROR)
             addAction(RecordingService.ACTION_RECORDING_STARTED)
             addAction(RecordingService.ACTION_RECORDING_STOPPED)
+            addAction(RecordingService.ACTION_RECORDING_DURATION)
+            addAction(RecordingService.ACTION_RECORDING_CANCELLED)
+            addAction(RecordingService.ACTION_TOO_SHORT)
+            addAction(RecordingService.ACTION_MAX_DURATION_REACHED)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -114,7 +140,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun initViews() {
         fabRecord = findViewById(R.id.fab_record)
+        btnCancel = findViewById(R.id.btn_cancel)
         tvStatus = findViewById(R.id.tv_status)
+        tvDuration = findViewById(R.id.tv_duration)
         tvResult = findViewById(R.id.tv_result)
         chipPtt = findViewById(R.id.chip_ptt)
         chipHandsfree = findViewById(R.id.chip_handsfree)
@@ -128,6 +156,10 @@ class MainActivity : AppCompatActivity() {
     private fun setupListeners() {
         fabRecord.setOnClickListener {
             onRecordButtonClicked()
+        }
+
+        btnCancel.setOnClickListener {
+            cancelRecordingService()
         }
 
         chipPtt.setOnClickListener {
@@ -182,7 +214,7 @@ class MainActivity : AppCompatActivity() {
                 stopRecordingService()
             }
             RecordingService.State.PROCESSING -> {
-                Toast.makeText(this, "Processing... please wait", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.status_processing_wait), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -205,6 +237,20 @@ class MainActivity : AppCompatActivity() {
         startService(intent)
     }
 
+    private fun cancelRecordingService() {
+        val intent = Intent(this, RecordingService::class.java).apply {
+            action = RecordingService.ACTION_CANCEL_RECORDING
+        }
+        startService(intent)
+    }
+
+    private fun updateDurationDisplay(elapsedSec: Float) {
+        val totalSecs = elapsedSec.toInt()
+        val mins = totalSecs / 60
+        val secs = totalSecs % 60
+        tvDuration.text = String.format("%d:%02d", mins, secs)
+    }
+
     private fun updateUI() {
         val statusText: String
         val fabIcon: Int
@@ -212,24 +258,32 @@ class MainActivity : AppCompatActivity() {
 
         when (currentState) {
             RecordingService.State.IDLE -> {
-                statusText = "Tap to record"
+                statusText = getString(R.string.status_tap_to_record)
                 fabIcon = R.drawable.ic_mic
                 bgColor = ContextCompat.getColor(this, R.color.md_primary)
+                tvDuration.visibility = View.GONE
+                btnCancel.visibility = View.GONE
             }
             RecordingService.State.RECORDING -> {
-                statusText = "Recording... (${currentMode})"
+                statusText = if (currentMode == RecordingService.MODE_PTT) getString(R.string.status_recording_ptt) else getString(R.string.status_recording_handsfree)
                 fabIcon = android.R.drawable.ic_media_pause
                 bgColor = ContextCompat.getColor(this, R.color.md_error)
+                tvDuration.visibility = View.VISIBLE
+                btnCancel.visibility = View.VISIBLE
             }
             RecordingService.State.PROCESSING -> {
-                statusText = "Processing..."
+                statusText = getString(R.string.status_processing)
                 fabIcon = android.R.drawable.ic_popup_sync
                 bgColor = ContextCompat.getColor(this, R.color.md_tertiary)
+                tvDuration.visibility = View.GONE
+                btnCancel.visibility = View.GONE
             }
             RecordingService.State.PASTING -> {
-                statusText = "Pasting result..."
+                statusText = getString(R.string.status_pasting)
                 fabIcon = R.drawable.ic_mic
                 bgColor = ContextCompat.getColor(this, R.color.md_primary)
+                tvDuration.visibility = View.GONE
+                btnCancel.visibility = View.GONE
             }
         }
 
@@ -284,7 +338,7 @@ class MainActivity : AppCompatActivity() {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                     onRecordButtonClicked()
                 } else {
-                    Toast.makeText(this, "Microphone permission required", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, getString(R.string.mic_permission_required), Toast.LENGTH_LONG).show()
                 }
             }
         }

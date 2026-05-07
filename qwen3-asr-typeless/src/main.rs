@@ -85,6 +85,54 @@ enum AppMessage {
 #[cfg(target_os = "windows")]
 const WM_APP_BASE: u32 = 0x8000;
 
+/// Static pointers for routing WM_APP messages from modal dialog loops.
+/// Set before showing a modal dialog, cleared after it closes.
+/// Only accessed on the main thread — same safety pattern as SETTINGS_CONFIG.
+#[cfg(target_os = "windows")]
+mod modal_ctx {
+    use super::*;
+    use std::sync::atomic::{AtomicPtr, Ordering};
+    
+    pub static CTX_PTR: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
+    pub static RT_PTR: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
+    
+    pub fn set(ctx: &mut AppContext, rt: &Arc<tokio::runtime::Runtime>) {
+        CTX_PTR.store(ctx as *mut AppContext as *mut std::ffi::c_void, Ordering::SeqCst);
+        RT_PTR.store(Arc::as_ptr(rt) as *mut std::ffi::c_void, Ordering::SeqCst);
+    }
+    
+    pub fn clear() {
+        CTX_PTR.store(std::ptr::null_mut(), Ordering::SeqCst);
+        RT_PTR.store(std::ptr::null_mut(), Ordering::SeqCst);
+    }
+}
+
+/// Route a WM_APP message through `handle_custom_message` using the
+/// static context pointers. Called from modal dialog loops so that
+/// hotkeys, ASR results, and VAD events are not lost while a dialog
+/// is open. Returns true if the message was handled.
+#[cfg(target_os = "windows")]
+pub fn route_modal_app_message(msg: u32, wparam: WPARAM, lparam: LPARAM) -> bool {
+    if !(msg >= WM_APP_BASE && msg <= WM_APP_BASE + 200) {
+        return false;
+    }
+    // Skip messages that would open another modal dialog (re-entrancy guard)
+    if msg == WM_TRAY_SHOW_SETTINGS || msg == WM_TRAY_SHOW_HISTORY || msg == WM_TRAY_SHOW_MAINWINDOW {
+        return true; // consumed but not acted upon — settings is already open
+    }
+    let ctx_ptr = modal_ctx::CTX_PTR.load(std::sync::atomic::Ordering::SeqCst);
+    let rt_ptr = modal_ctx::RT_PTR.load(std::sync::atomic::Ordering::SeqCst);
+    if ctx_ptr.is_null() || rt_ptr.is_null() {
+        return false;
+    }
+    unsafe {
+        let ctx = &mut *(ctx_ptr as *mut AppContext);
+        let rt = &*(rt_ptr as *const Arc<tokio::runtime::Runtime>);
+        handle_custom_message(ctx, msg, wparam, lparam, rt);
+    }
+    true
+}
+
 #[cfg(target_os = "windows")]
 const WM_ASR_RESULT: u32 = WM_APP_BASE + 100;
 #[cfg(target_os = "windows")]
@@ -399,6 +447,26 @@ fn main() -> anyhow::Result<()> {
             )
         })
         .init();
+
+    // Initialize ONNX Runtime with bundled DLL path before any ort usage.
+    // ort 2.0.0-rc.10 expects ONNX Runtime 1.22.x, but Windows ships 1.10.0
+    // in System32. init_from() sets the OnceLock DLL path so ort loads the
+    // correct version from the executable directory instead.
+    {
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let dll_path = exe_dir.join("onnxruntime.dll");
+                if dll_path.exists() {
+                    log::info!("Using bundled ONNX Runtime: {}", dll_path.display());
+                    if let Err(e) = ort::init_from(dll_path.to_string_lossy().to_string()).commit() {
+                        log::warn!("Failed to initialize ONNX Runtime from bundled DLL: {}", e);
+                    }
+                } else {
+                    log::warn!("No bundled onnxruntime.dll found at {}; will use system DLL (may cause version mismatch)", dll_path.display());
+                }
+            }
+        }
+    }
 
     let config_path = AppConfig::default_config_path();
     let config = AppConfig::load(&config_path).unwrap_or_else(|e| {
@@ -788,11 +856,7 @@ fn handle_app_message(
         }
 
         AppMessage::TrayShowMainWindow => {
-            if !main_window::is_main_window_open() {
-                main_window::show_main_window(&mut ctx.config, &ctx.config_path, &mut ctx.dictionary, &ctx.history, &ctx.i18n);
-            } else {
-                main_window::show_main_window(&mut ctx.config, &ctx.config_path, &mut ctx.dictionary, &ctx.history, &ctx.i18n);
-            }
+            main_window::show_main_window(&mut ctx.config, &ctx.config_path, &mut ctx.dictionary, &ctx.history, &ctx.i18n);
         }
 
         AppMessage::TrayQuit => {
@@ -880,7 +944,9 @@ fn handle_custom_message(
 
         WM_TRAY_SHOW_SETTINGS => {
             let config_path = config::AppConfig::default_config_path();
+            modal_ctx::set(ctx, rt);
             settings::show_settings_dialog(&mut ctx.config, &config_path, &mut ctx.dictionary, ctx.msg_hwnd);
+            modal_ctx::clear();
         }
 
         WM_TRAY_SHOW_HISTORY => {
@@ -888,11 +954,7 @@ fn handle_custom_message(
         }
 
         WM_TRAY_SHOW_MAINWINDOW => {
-            if !main_window::is_main_window_open() {
-                main_window::show_main_window(&mut ctx.config, &ctx.config_path, &mut ctx.dictionary, &ctx.history, &ctx.i18n, ctx.msg_hwnd);
-            } else {
-                main_window::show_main_window(&mut ctx.config, &ctx.config_path, &mut ctx.dictionary, &ctx.history, &ctx.i18n, ctx.msg_hwnd);
-            }
+            main_window::show_main_window(&mut ctx.config, &ctx.config_path, &mut ctx.dictionary, &ctx.history, &ctx.i18n, ctx.msg_hwnd);
         }
 
         _ => {}
@@ -1430,19 +1492,17 @@ fn vad_monitor_thread(
                     silence_start = None;
                     vad_send(&sender, AppMessage::VadSilenceEnd);
                 }
-            } else {
-                if !is_silence {
-                    log::debug!("VAD: silence started");
-                    is_silence = true;
-                    silence_start = Some(Instant::now());
-                    vad_send(&sender, AppMessage::VadSilenceStart);
-                } else if let Some(start) = silence_start {
-                    let elapsed = start.elapsed().as_secs_f64();
-                    if elapsed >= silence_duration_secs {
-                        log::info!("VAD: silence timeout ({:.1}s >= {:.1}s)", elapsed, silence_duration_secs);
-                        vad_send(&sender, AppMessage::SilenceTimeout);
-                        return;
-                    }
+            } else if !is_silence {
+                log::debug!("VAD: silence started");
+                is_silence = true;
+                silence_start = Some(Instant::now());
+                vad_send(&sender, AppMessage::VadSilenceStart);
+            } else if let Some(start) = silence_start {
+                let elapsed = start.elapsed().as_secs_f64();
+                if elapsed >= silence_duration_secs {
+                    log::info!("VAD: silence timeout ({:.1}s >= {:.1}s)", elapsed, silence_duration_secs);
+                    vad_send(&sender, AppMessage::SilenceTimeout);
+                    return;
                 }
             }
         }

@@ -25,4 +25,7 @@
 
     <color name="md_outline">#717971</color>
     <color name="md_outline_variant">#C1C9BF</color>
+
+    <!-- Launcher icon background -->
+    <color name="ic_launcher_background">#1B6B4A</color>
 </resources>

@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App -->
+    <string name="app_name">Typeless</string>
+
+    <!-- Navigation / Tabs -->
+    <string name="title_settings">设置</string>
+    <string name="title_history">历史</string>
+    <string name="record">录音</string>
+    <string name="history">历史</string>
+    <string name="settings">设置</string>
+
+    <!-- Main screen status -->
+    <string name="status_tap_to_record">点击录音</string>
+    <string name="status_recording">录音中…</string>
+    <string name="status_recording_ptt">录音中… (按住说话)</string>
+    <string name="status_recording_handsfree">录音中… (自动)</string>
+    <string name="status_processing">处理中…</string>
+    <string name="status_pasting">粘贴结果…</string>
+    <string name="status_processing_wait">处理中，请稍候</string>
+    <string name="status_recording_cancelled">录音已取消</string>
+    <string name="status_too_short">录音时间过短，已丢弃</string>
+    <string name="status_max_duration">已达最大录音时长</string>
+
+    <!-- Mode -->
+    <string name="mode_ptt">按住说话</string>
+    <string name="mode_handsfree">自动</string>
+    <string name="mode_ptt_full">按住说话 (PTT)</string>
+    <string name="mode_handsfree_full">自动 (VAD 静音停止)</string>
+    <string name="mode_vad">VAD</string>
+
+    <!-- Transcription result -->
+    <string name="transcription_placeholder">转录结果将显示在这里…</string>
+    <string name="search_hint">搜索转录记录</string>
+
+    <!-- Notifications -->
+    <string name="notification_recording">正在录音…</string>
+    <string name="notification_processing">正在处理转录…</string>
+    <string name="notification_channel_name">录音</string>
+    <string name="notification_channel_desc">ASR 录音服务</string>
+    <string name="notification_title">Typeless 语音识别</string>
+    <string name="notification_stop">停止</string>
+    <string name="notification_cancel">取消</string>
+
+    <!-- Clipboard -->
+    <string name="copied_to_clipboard">已复制到剪贴板</string>
+
+    <!-- Permission -->
+    <string name="mic_permission_required">需要麦克风权限</string>
+
+    <!-- Buttons -->
+    <string name="btn_cancel">取消</string>
+    <string name="btn_test_connection">测试连接</string>
+    <string name="btn_export_dictionary">导出词典</string>
+    <string name="btn_import_dictionary">导入词典</string>
+
+    <!-- Connection status -->
+    <string name="connection_status_ready">已连接：%1$s (%2$s)</string>
+    <string name="connection_status_error">连接失败：%s</string>
+    <string name="connection_status_checking">检查中…</string>
+
+    <!-- Settings screen -->
+    <string name="settings_asr_url">ASR 服务地址</string>
+    <string name="settings_api_key">API 密钥（可选）</string>
+    <string name="settings_default_mode">默认录音模式</string>
+    <string name="settings_vad_threshold">VAD 阈值</string>
+    <string name="settings_silence_duration">静音时长（秒）</string>
+    <string name="settings_postproc">后处理（标点清理）</string>
+    <string name="settings_remove_fillers">去除语气词（嗯、啊等）</string>
+    <string name="settings_remove_repetitions">去除重复</string>
+    <string name="settings_auto_format">自动格式化（标点、大小写）</string>
+    <string name="settings_dictionary">词典</string>
+    <string name="settings_add_word">添加词条</string>
+    <string name="settings_test_connection">测试连接</string>
+    <string name="settings_recording">录音</string>
+    <string name="settings_max_recording_duration">最大录音时长（秒，0 = 无限制）</string>
+    <string name="settings_play_sounds">播放录音开始/结束提示音</string>
+    <string name="settings_llm_postproc">LLM 后处理</string>
+    <string name="settings_llm_enabled">启用 LLM 后处理</string>
+    <string name="settings_llm_url">LLM 地址</string>
+    <string name="settings_llm_model">LLM 模型</string>
+    <string name="settings_llm_api_key">API 密钥</string>
+    <string name="settings_custom_prompt">自定义提示词</string>
+
+    <!-- Dictionary dialog -->
+    <string name="dict_add_title">添加词典条目</string>
+    <string name="dict_word_hint">词语（识别结果）</string>
+    <string name="dict_correct_hint">正确拼写</string>
+    <string name="dict_category_hint">分类（可选）</string>
+    <string name="dict_add">添加</string>
+    <string name="dict_cancel">取消</string>
+    <string name="dict_removed">已删除：%s</string>
+    <string name="dict_added">已添加：%1$s → %2$s</string>
+    <string name="dict_required">词语和正确拼写为必填项</string>
+    <string name="dict_no_entries_to_export">没有词典条目可导出</string>
+    <string name="dict_export_success">词典导出成功</string>
+    <string name="dict_export_failed">导出失败：%s</string>
+    <string name="dict_import_success">已导入 %1$d 个新条目（共 %2$d 个）</string>
+    <string name="dict_import_failed">导入失败：%s</string>
+    <string name="dict_import_invalid_json">导入失败：JSON 格式无效</string>
+
+    <!-- History -->
+    <string name="history_copy">复制</string>
+    <string name="history_close">关闭</string>
+    <string name="history_delete_entry">删除条目？</string>
+    <string name="history_delete_confirmation">删除此条转录记录？</string>
+    <string name="history_delete">删除</string>
+    <string name="history_export_json">导出为 JSON</string>
+    <string name="history_export_csv">导出为 CSV</string>
+    <string name="history_export_txt">导出为 TXT</string>
+    <string name="history_share">分享</string>
+    <string name="history_no_entries_to_export">没有历史记录可导出</string>
+    <string name="history_export_success">历史记录导出成功</string>
+    <string name="history_export_failed">导出失败：%s</string>
+    <string name="history_exported">已导出 %1$d 条记录为 %2$s 格式</string>
+    <string name="history_share_title">分享转录记录</string>
+    <string name="history_export_all">全部导出</string>
+
+    <!-- Content description -->
+    <string name="content_desc_record">录音</string>
+
+    <!-- Error -->
+    <string name="error_unknown">未知错误</string>
+    <string name="error_format">错误：%s</string>
+    <string name="error_recording_start_failed">录音启动失败：%s</string>
+    <string name="error_transcription_failed">转录失败</string>
+</resources>

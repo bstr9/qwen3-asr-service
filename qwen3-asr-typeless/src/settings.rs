@@ -375,7 +375,7 @@ mod windows_impl {
 
         let title = ew("Qwen3-ASR Settings");
         let hwnd = CreateWindowExW(
-            WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
+            WS_EX_DLGMODALFRAME | WS_EX_TOPMOST | WS_EX_CONTROLPARENT,
             PCWSTR(class_name.as_ptr()),
             PCWSTR(title.as_ptr()),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
@@ -399,11 +399,19 @@ mod windows_impl {
         let _ = UpdateWindow(hwnd);
 
         // Modal message loop
+        // Routes WM_APP messages (hotkeys, ASR results, VAD events) to
+        // handle_custom_message so they are not lost while the dialog is open.
         let mut msg = MSG::default();
         loop {
             let ret = GetMessageW(&mut msg, None, 0, 0);
             if ret.0 <= 0 {
                 break;
+            }
+            if IsDialogMessageW(hwnd, &msg).as_bool() {
+                continue;
+            }
+            if crate::route_modal_app_message(msg.message, msg.wParam, msg.lParam) {
+                continue;
             }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
@@ -955,7 +963,6 @@ mod windows_impl {
                 LRESULT(0)
             }
             WM_DESTROY => {
-                PostQuitMessage(0);
                 LRESULT(0)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -1141,6 +1148,9 @@ mod windows_impl {
     }
 
     unsafe fn create_dictionary_window(dictionary: &mut DictionaryManager, parent: HWND) -> anyhow::Result<()> {
+        let lang_str = crate::config::AppConfig::load(&crate::config::AppConfig::default_config_path()).map(|c| c.ui.language.clone()).unwrap_or_default();
+        let i18n = crate::i18n::I18n::from_config(&lang_str);
+
         let hinstance: HINSTANCE = GetModuleHandleW(None)?.into();
 
         // Register window class (ignore failure — may already be registered)
@@ -1156,9 +1166,9 @@ mod windows_impl {
         };
         let _ = RegisterClassW(&wc);
 
-        let title = ew("Personal Dictionary");
+        let title = ew(i18n.t("dict.title"));
         let hwnd = CreateWindowExW(
-            WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
+            WS_EX_DLGMODALFRAME | WS_EX_TOPMOST | WS_EX_CONTROLPARENT,
             PCWSTR(class_name.as_ptr()),
             PCWSTR(title.as_ptr()),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
@@ -1177,7 +1187,7 @@ mod windows_impl {
 
         // Create controls
         let font = GetStockObject(DEFAULT_GUI_FONT);
-        create_dict_controls(hwnd, hinstance, font);
+        create_dict_controls(hwnd, hinstance, font, &i18n);
 
         // Populate the listview
         populate_dict_listview(hwnd, dictionary.list());
@@ -1187,11 +1197,19 @@ mod windows_impl {
         let _ = UpdateWindow(hwnd);
 
         // Modal message loop
+        // Routes WM_APP messages (hotkeys, ASR results, VAD events) to
+        // handle_custom_message so they are not lost while the dialog is open.
         let mut msg = MSG::default();
         loop {
             let ret = GetMessageW(&mut msg, None, 0, 0);
             if ret.0 <= 0 {
                 break;
+            }
+            if IsDialogMessageW(hwnd, &msg).as_bool() {
+                continue;
+            }
+            if crate::route_modal_app_message(msg.message, msg.wParam, msg.lParam) {
+                continue;
             }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
@@ -1203,12 +1221,12 @@ mod windows_impl {
         Ok(())
     }
 
-    unsafe fn create_dict_controls(hwnd: HWND, hinstance: HINSTANCE, font: HGDIOBJ) {
+    unsafe fn create_dict_controls(hwnd: HWND, hinstance: HINSTANCE, font: HGDIOBJ, i18n: &crate::i18n::I18n) {
         // Search label + edit above the listview
         let search_label = CreateWindowExW(
             WS_EX_LEFT,
             PCWSTR(ew("STATIC").as_ptr()),
-            PCWSTR(ew("Search:").as_ptr()),
+            PCWSTR(ew(i18n.t("dict.search")).as_ptr()),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_LEFT.0),
             10, 10, 55, 20,
             hwnd,
@@ -1253,15 +1271,15 @@ mod windows_impl {
         let _ = SendMessageW(lv, WM_SETFONT, WPARAM(font.0 as usize), LPARAM(1));
 
         // Add columns
-        add_dict_listview_column(lv, 0, "Word", 160);
-        add_dict_listview_column(lv, 1, "Correct Spelling", 180);
-        add_dict_listview_column(lv, 2, "Category", 120);
+        add_dict_listview_column(lv, 0, i18n.t("dict.word"), 160);
+        add_dict_listview_column(lv, 1, i18n.t("dict.correct"), 180);
+        add_dict_listview_column(lv, 2, i18n.t("dict.category"), 120);
 
         // Buttons at bottom
         let add_btn = CreateWindowExW(
             WS_EX_LEFT,
             PCWSTR(ew("BUTTON").as_ptr()),
-            PCWSTR(ew("Add").as_ptr()),
+            PCWSTR(ew(i18n.t("dict.add")).as_ptr()),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             10, 300, 80, 28,
             hwnd,
@@ -1275,7 +1293,7 @@ mod windows_impl {
         let del_btn = CreateWindowExW(
             WS_EX_LEFT,
             PCWSTR(ew("BUTTON").as_ptr()),
-            PCWSTR(ew("Delete").as_ptr()),
+            PCWSTR(ew(i18n.t("dict.delete")).as_ptr()),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             100, 300, 80, 28,
             hwnd,
@@ -1289,7 +1307,7 @@ mod windows_impl {
         let imp_btn = CreateWindowExW(
             WS_EX_LEFT,
             PCWSTR(ew("BUTTON").as_ptr()),
-            PCWSTR(ew("Import").as_ptr()),
+            PCWSTR(ew(i18n.t("dict.import")).as_ptr()),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             190, 300, 80, 28,
             hwnd,
@@ -1303,7 +1321,7 @@ mod windows_impl {
         let exp_btn = CreateWindowExW(
             WS_EX_LEFT,
             PCWSTR(ew("BUTTON").as_ptr()),
-            PCWSTR(ew("Export").as_ptr()),
+            PCWSTR(ew(i18n.t("dict.export")).as_ptr()),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             280, 300, 80, 28,
             hwnd,
@@ -1317,7 +1335,7 @@ mod windows_impl {
         let preset_btn = CreateWindowExW(
             WS_EX_LEFT,
             PCWSTR(ew("BUTTON").as_ptr()),
-            PCWSTR(ew("Presets").as_ptr()),
+            PCWSTR(ew(i18n.t("dict.import")).as_ptr()),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             370, 300, 60, 28,
             hwnd,
@@ -1331,7 +1349,7 @@ mod windows_impl {
         let close_btn = CreateWindowExW(
             WS_EX_LEFT,
             PCWSTR(ew("BUTTON").as_ptr()),
-            PCWSTR(ew("Close").as_ptr()),
+            PCWSTR(ew(i18n.t("dict.close")).as_ptr()),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             435, 300, 55, 28,
             hwnd,
@@ -1534,7 +1552,6 @@ mod windows_impl {
             }
             WM_DESTROY => {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                PostQuitMessage(0);
                 LRESULT(0)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -1554,6 +1571,9 @@ mod windows_impl {
     }
 
     unsafe fn create_add_entry_window(parent: HWND) -> anyhow::Result<()> {
+        let lang_str = crate::config::AppConfig::load(&crate::config::AppConfig::default_config_path()).map(|c| c.ui.language.clone()).unwrap_or_default();
+        let i18n = crate::i18n::I18n::from_config(&lang_str);
+
         let hinstance: HINSTANCE = GetModuleHandleW(None)?.into();
 
         // Register window class
@@ -1569,9 +1589,9 @@ mod windows_impl {
         };
         let _ = RegisterClassW(&wc);
 
-        let title = ew("Add Dictionary Entry");
+        let title = ew(i18n.t("dict.add_title"));
         let hwnd = CreateWindowExW(
-            WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
+            WS_EX_DLGMODALFRAME | WS_EX_TOPMOST | WS_EX_CONTROLPARENT,
             PCWSTR(class_name.as_ptr()),
             PCWSTR(title.as_ptr()),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
@@ -1591,7 +1611,7 @@ mod windows_impl {
         let wl = CreateWindowExW(
             WS_EX_LEFT,
             PCWSTR(ew("STATIC").as_ptr()),
-            PCWSTR(ew("Word:").as_ptr()),
+            PCWSTR(ew(&format!("{}:", i18n.t("dict.word"))).as_ptr()),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_LEFT.0),
             15, 15, 80, 20,
             hwnd,
@@ -1620,7 +1640,7 @@ mod windows_impl {
         let cl = CreateWindowExW(
             WS_EX_LEFT,
             PCWSTR(ew("STATIC").as_ptr()),
-            PCWSTR(ew("Correct Spelling:").as_ptr()),
+            PCWSTR(ew(&format!("{}:", i18n.t("dict.correct"))).as_ptr()),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_LEFT.0),
             15, 50, 100, 20,
             hwnd,
@@ -1649,7 +1669,7 @@ mod windows_impl {
         let catl = CreateWindowExW(
             WS_EX_LEFT,
             PCWSTR(ew("STATIC").as_ptr()),
-            PCWSTR(ew("Category:").as_ptr()),
+            PCWSTR(ew(&format!("{}:", i18n.t("dict.category"))).as_ptr()),
             WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_LEFT.0),
             15, 85, 80, 20,
             hwnd,
@@ -1678,7 +1698,7 @@ mod windows_impl {
         let ok_btn = CreateWindowExW(
             WS_EX_LEFT,
             PCWSTR(ew("BUTTON").as_ptr()),
-            PCWSTR(ew("OK").as_ptr()),
+            PCWSTR(ew(i18n.t("settings.ok")).as_ptr()),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32),
             100, 130, 100, 28,
             hwnd,
@@ -1692,7 +1712,7 @@ mod windows_impl {
         let cancel_btn = CreateWindowExW(
             WS_EX_LEFT,
             PCWSTR(ew("BUTTON").as_ptr()),
-            PCWSTR(ew("Cancel").as_ptr()),
+            PCWSTR(ew(i18n.t("settings.cancel")).as_ptr()),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             210, 130, 100, 28,
             hwnd,
@@ -1707,11 +1727,19 @@ mod windows_impl {
         let _ = UpdateWindow(hwnd);
 
         // Modal message loop
+        // Routes WM_APP messages (hotkeys, ASR results, VAD events) to
+        // handle_custom_message so they are not lost while the dialog is open.
         let mut msg = MSG::default();
         loop {
             let ret = GetMessageW(&mut msg, None, 0, 0);
             if ret.0 <= 0 {
                 break;
+            }
+            if IsDialogMessageW(hwnd, &msg).as_bool() {
+                continue;
+            }
+            if crate::route_modal_app_message(msg.message, msg.wParam, msg.lParam) {
+                continue;
             }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
@@ -1775,7 +1803,6 @@ mod windows_impl {
                 LRESULT(0)
             }
             WM_DESTROY => {
-                PostQuitMessage(0);
                 LRESULT(0)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),

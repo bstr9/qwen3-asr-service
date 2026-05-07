@@ -13,7 +13,8 @@
         android:layout_height="?attr/actionBarSize"
         android:background="?attr/colorSurface"
         app:title="@string/title_history"
-        app:navigationIcon="?attr/homeAsUpIndicator" />
+        app:navigationIcon="?attr/homeAsUpIndicator"
+        app:menu="@menu/history_menu" />
 
     <!-- Search bar -->
     <com.google.android.material.textfield.TextInputLayout
@@ -28,7 +29,7 @@
             android:id="@+id/et_search"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="Search transcriptions"
+            android:hint="@string/search_hint"
             android:inputType="text" />
 
     </com.google.android.material.textfield.TextInputLayout>

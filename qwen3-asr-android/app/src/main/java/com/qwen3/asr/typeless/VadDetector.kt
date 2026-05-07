@@ -5,7 +5,7 @@ import android.content.SharedPreferences
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
-import java.nio.ShortBuffer
+import java.nio.LongBuffer
 
 /**
  * Silero VAD (Voice Activity Detection) wrapper using ONNX Runtime.
@@ -92,8 +92,11 @@ class VadDetector(private val context: Context) {
         hTensor?.close()
         cTensor?.close()
 
-        hTensor = OnnxTensor.createTensor(env, hData, hShape)
-        cTensor = OnnxTensor.createTensor(env, cData, hShape)
+        val hBuffer = java.nio.FloatBuffer.wrap(hData)
+        val cBuffer = java.nio.FloatBuffer.wrap(cData)
+
+        hTensor = OnnxTensor.createTensor(env, hBuffer, hShape)
+        cTensor = OnnxTensor.createTensor(env, cBuffer, hShape)
 
         silenceStartMs = 0L
         isSpeechDetected = false
@@ -143,8 +146,10 @@ class VadDetector(private val context: Context) {
             chunk[i].toFloat() / 32768.0f
         }
 
-        val inputTensor = OnnxTensor.createTensor(env, floatSamples, longArrayOf(1, chunk.size.toLong()))
-        val srTensor = OnnxTensor.createTensor(env, longArrayOf(SAMPLE_RATE))
+        val inputBuffer = java.nio.FloatBuffer.wrap(floatSamples)
+        val inputTensor = OnnxTensor.createTensor(env, inputBuffer, longArrayOf(1, chunk.size.toLong()))
+        val srBuffer = LongBuffer.wrap(longArrayOf(SAMPLE_RATE))
+        val srTensor = OnnxTensor.createTensor(env, srBuffer, longArrayOf(1))
 
         val currentH = hTensor ?: return 0f
         val currentC = cTensor ?: return 0f
@@ -208,10 +213,6 @@ class VadDetector(private val context: Context) {
 
     fun getSilenceDurationSec(): Float =
         prefs.getFloat("silence_duration", DEFAULT_SILENCE_DURATION_SEC)
-
-    fun getLastProbability(): Float = lastProbability
-
-    fun isSpeechDetected(): Boolean = isSpeechDetected
 
     /**
      * Release all ONNX resources.

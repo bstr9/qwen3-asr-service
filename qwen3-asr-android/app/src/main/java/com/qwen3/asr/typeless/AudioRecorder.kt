@@ -157,8 +157,6 @@ class AudioRecorder {
         return Pair(wavData, duration)
     }
 
-    fun isRecording(): Boolean = isRecording
-
     /**
      * Release all resources.
      */

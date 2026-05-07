@@ -10,6 +10,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
  * Room database for storing ASR transcription history.
@@ -40,31 +42,36 @@ interface HistoryDao {
     @Query("SELECT * FROM history ORDER BY timestamp DESC")
     suspend fun getAll(): List<HistoryEntry>
 
-    @Query("SELECT * FROM history WHERE text LIKE :query ORDER BY timestamp DESC")
-    suspend fun search(query: String): List<HistoryEntry>
-
     @Delete
     suspend fun delete(entry: HistoryEntry)
-
-    @Query("DELETE FROM history WHERE id = :id")
-    suspend fun deleteById(id: Long)
-
-    @Query("DELETE FROM history")
-    suspend fun deleteAll()
-
-    @Query("SELECT COUNT(*) FROM history")
-    suspend fun count(): Int
 }
 
 // ---------- Database ----------
 
-@Database(entities = [HistoryEntry::class], version = 1, exportSchema = false)
+@Database(entities = [HistoryEntry::class], version = 3, exportSchema = false)
 abstract class HistoryDatabase : RoomDatabase() {
     abstract fun historyDao(): HistoryDao
 
     companion object {
         @Volatile
         private var INSTANCE: HistoryDatabase? = null
+
+        /** Migration from v1 to v2: add `cancelled` column. */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE history ADD COLUMN cancelled INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /** Migration from v2 to v3: remove `cancelled` column (recreate table). */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE history_tmp (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, text TEXT NOT NULL, rawText TEXT NOT NULL, timestamp INTEGER NOT NULL, durationSecs REAL NOT NULL, mode TEXT NOT NULL, language TEXT NOT NULL)")
+                db.execSQL("INSERT INTO history_tmp (id, text, rawText, timestamp, durationSecs, mode, language) SELECT id, text, rawText, timestamp, durationSecs, mode, language FROM history")
+                db.execSQL("DROP TABLE history")
+                db.execSQL("ALTER TABLE history_tmp RENAME TO history")
+            }
+        }
 
         fun getInstance(context: Context): HistoryDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -73,6 +80,7 @@ abstract class HistoryDatabase : RoomDatabase() {
                     HistoryDatabase::class.java,
                     "typeless_history"
                 )
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { INSTANCE = it }

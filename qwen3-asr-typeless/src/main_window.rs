@@ -528,15 +528,6 @@ fn save_window_geometry(hwnd: HWND) {
 }
 
 #[cfg(target_os = "windows")]
-pub fn is_main_window_open() -> bool {
-    let raw = MAIN_HWND.load(Ordering::SeqCst);
-    if raw.is_null() {
-        return false;
-    }
-    unsafe { IsWindow(HWND(raw)).as_bool() }
-}
-
-#[cfg(target_os = "windows")]
 pub fn close_main_window() {
     let raw = MAIN_HWND.load(Ordering::SeqCst);
     if !raw.is_null() {
@@ -661,11 +652,6 @@ fn create_about_page_gtk(i18n: &I18n, config: &AppConfig) -> gtk4::Box {
     box_.append(&lang);
 
     box_
-}
-
-#[cfg(target_os = "linux")]
-pub fn is_main_window_open() -> bool {
-    MAIN_WINDOW_OPEN.load(Ordering::SeqCst)
 }
 
 #[cfg(target_os = "linux")]

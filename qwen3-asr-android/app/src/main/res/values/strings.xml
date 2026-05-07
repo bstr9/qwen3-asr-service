@@ -1,19 +1,127 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- App -->
     <string name="app_name">Typeless</string>
+
+    <!-- Navigation / Tabs -->
     <string name="title_settings">Settings</string>
     <string name="title_history">History</string>
     <string name="record">Record</string>
     <string name="history">History</string>
     <string name="settings">Settings</string>
-    <string name="tap_to_record">Tap to record</string>
-    <string name="recording">Recording…</string>
-    <string name="processing">Processing…</string>
-    <string name="pasting_result">Pasting result…</string>
+
+    <!-- Main screen status -->
+    <string name="status_tap_to_record">Tap to record</string>
+    <string name="status_recording">Recording…</string>
+    <string name="status_recording_ptt">Recording… (ptt)</string>
+    <string name="status_recording_handsfree">Recording… (handsfree)</string>
+    <string name="status_processing">Processing…</string>
+    <string name="status_pasting">Pasting result…</string>
+    <string name="status_processing_wait">Processing… please wait</string>
+    <string name="status_recording_cancelled">Recording cancelled</string>
+    <string name="status_too_short">Recording too short, discarded</string>
+    <string name="status_max_duration">Max duration reached</string>
+
+    <!-- Mode -->
+    <string name="mode_ptt">PTT</string>
+    <string name="mode_handsfree">Hands-free</string>
+    <string name="mode_ptt_full">PTT (Push-to-Talk)</string>
+    <string name="mode_handsfree_full">Hands-free (VAD auto-stop)</string>
+    <string name="mode_vad">VAD</string>
+
+    <!-- Transcription result -->
     <string name="transcription_placeholder">Transcription will appear here…</string>
     <string name="search_hint">Search transcriptions</string>
+
+    <!-- Notifications -->
+    <string name="notification_recording">Recording audio…</string>
+    <string name="notification_processing">Processing transcription…</string>
+    <string name="notification_channel_name">Recording</string>
+    <string name="notification_channel_desc">Audio recording for ASR</string>
+    <string name="notification_title">Typeless ASR</string>
+    <string name="notification_stop">Stop</string>
+    <string name="notification_cancel">Cancel</string>
+
+    <!-- Clipboard -->
     <string name="copied_to_clipboard">Copied to clipboard</string>
-    <string name="delete_entry">Delete entry?</string>
-    <string name="delete_confirmation">Delete this transcription?</string>
+
+    <!-- Permission -->
     <string name="mic_permission_required">Microphone permission required</string>
+
+    <!-- Buttons -->
+    <string name="btn_cancel">Cancel</string>
+    <string name="btn_test_connection">Test Connection</string>
+    <string name="btn_export_dictionary">Export Dictionary</string>
+    <string name="btn_import_dictionary">Import Dictionary</string>
+
+    <!-- Connection status -->
+    <string name="connection_status_ready">Connected: %1$s (%2$s)</string>
+    <string name="connection_status_error">Connection failed: %s</string>
+    <string name="connection_status_checking">Checking…</string>
+
+    <!-- Settings screen -->
+    <string name="settings_asr_url">ASR Service URL</string>
+    <string name="settings_api_key">API Key (optional)</string>
+    <string name="settings_default_mode">Default Recording Mode</string>
+    <string name="settings_vad_threshold">VAD Threshold</string>
+    <string name="settings_silence_duration">Silence Duration (seconds)</string>
+    <string name="settings_postproc">Post-processing (punctuation cleanup)</string>
+    <string name="settings_remove_fillers">Remove fillers (um, uh, etc.)</string>
+    <string name="settings_remove_repetitions">Remove repetitions</string>
+    <string name="settings_auto_format">Auto-format (punctuation, capitalization)</string>
+    <string name="settings_dictionary">Dictionary</string>
+    <string name="settings_add_word">Add Word</string>
+    <string name="settings_test_connection">Test Connection</string>
+    <string name="settings_recording">Recording</string>
+    <string name="settings_max_recording_duration">Max Recording Duration (seconds, 0 = no limit)</string>
+    <string name="settings_play_sounds">Play recording start/stop sounds</string>
+    <string name="settings_llm_postproc">LLM Post-processing</string>
+    <string name="settings_llm_enabled">Enable LLM post-processing</string>
+    <string name="settings_llm_url">LLM URL</string>
+    <string name="settings_llm_model">LLM Model</string>
+    <string name="settings_llm_api_key">API Key</string>
+    <string name="settings_custom_prompt">Custom Prompt</string>
+
+    <!-- Dictionary dialog -->
+    <string name="dict_add_title">Add Dictionary Entry</string>
+    <string name="dict_word_hint">Word (as recognized)</string>
+    <string name="dict_correct_hint">Correct spelling</string>
+    <string name="dict_category_hint">Category (optional)</string>
+    <string name="dict_add">Add</string>
+    <string name="dict_cancel">Cancel</string>
+    <string name="dict_removed">Removed: %s</string>
+    <string name="dict_added">Added: %1$s → %2$s</string>
+    <string name="dict_required">Word and correct spelling are required</string>
+    <string name="dict_no_entries_to_export">No dictionary entries to export</string>
+    <string name="dict_export_success">Dictionary exported successfully</string>
+    <string name="dict_export_failed">Export failed: %s</string>
+    <string name="dict_import_success">Imported %1$d new entries (%2$d total)</string>
+    <string name="dict_import_failed">Import failed: %s</string>
+    <string name="dict_import_invalid_json">Import failed: invalid JSON format</string>
+
+    <!-- History -->
+    <string name="history_copy">Copy</string>
+    <string name="history_close">Close</string>
+    <string name="history_delete_entry">Delete entry?</string>
+    <string name="history_delete_confirmation">Delete this transcription?</string>
+    <string name="history_delete">Delete</string>
+    <string name="history_export_json">Export as JSON</string>
+    <string name="history_export_csv">Export as CSV</string>
+    <string name="history_export_txt">Export as TXT</string>
+    <string name="history_share">Share</string>
+    <string name="history_no_entries_to_export">No history entries to export</string>
+    <string name="history_export_success">History exported successfully</string>
+    <string name="history_export_failed">Export failed: %s</string>
+    <string name="history_exported">Exported %1$d entries as %2$s</string>
+    <string name="history_share_title">Share transcription</string>
+    <string name="history_export_all">Export All</string>
+
+    <!-- Content description -->
+    <string name="content_desc_record">Record</string>
+
+    <!-- Error -->
+    <string name="error_unknown">Unknown error</string>
+    <string name="error_format">Error: %s</string>
+    <string name="error_recording_start_failed">Failed to start recording: %s</string>
+    <string name="error_transcription_failed">Transcription failed</string>
 </resources>

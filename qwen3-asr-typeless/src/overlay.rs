@@ -48,11 +48,11 @@ const COLOR_GREEN_R: f64 = 0.0 / 255.0;
 const COLOR_GREEN_G: f64 = 200.0 / 255.0;
 const COLOR_GREEN_B: f64 = 80.0 / 255.0;
 
-const COLOR_YELLOW_R: f64 = 255.0 / 255.0;
+const COLOR_YELLOW_R: f64 = 1.0;
 const COLOR_YELLOW_G: f64 = 200.0 / 255.0;
 const COLOR_YELLOW_B: f64 = 0.0 / 255.0;
 
-const COLOR_RED_R: f64 = 255.0 / 255.0;
+const COLOR_RED_R: f64 = 1.0;
 const COLOR_RED_G: f64 = 60.0 / 255.0;
 const COLOR_RED_B: f64 = 60.0 / 255.0;
 

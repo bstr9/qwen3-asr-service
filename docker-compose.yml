@@ -3,6 +3,8 @@ services:
     image: lancelrq/qwen3-asr-service:latest
     ports:
       - "8765:8765"
+    environment:
+      HF_ENDPOINT: https://hf-mirror.com
     volumes:
       - ./asr-service/models:/app/models
       - ./asr-service/logs:/app/logs
